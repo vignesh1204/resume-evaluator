@@ -1,11 +1,12 @@
 import React from 'react';
+import MainPage from '../components/AppPage/MainPage';
 
 const AppPage = () => {
     return (
         <div>
-            <h1>Try it now!</h1>
+            <MainPage/>
         </div>
-    );
+    )
 };
 
 export default AppPage;
