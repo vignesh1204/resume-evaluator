@@ -1,28 +1,38 @@
-import React, {useState} from 'react';
+import React, { useState } from 'react';
+import pdfToText from 'react-pdftotext'
+
 import CustomButton from '../Button/CustomButton';
+import DragNDrop from '../DragNDrop/DragNDrop';
+
+import './MainPage.css';
 
 const MainPage = () => {
-    const [resumeData, setResumeData] = useState('');
+    const [uploadedFile, setUploadedFile] = useState(null);
     const [jobDesc, setJobDesc] = useState('');
 
     const onClickEvalBtn = () => {
-        alert ("Evaluating..")
+        pdfToText(uploadedFile)
+            .then((data) => {
+                console.log(data);
+            })
+            .catch((error) => {
+                console.error(error);
+            });
     }
 
     return (
         <div className='body'>
-            <input
-                type="text"
-                placeholder="Enter your resume info"
-                value={resumeData}
-                onChange={(e) => setResumeData(e.target.value)}
-            />
-            <input
-                type="text"
-                placeholder="Enter the job description"
-                value={jobDesc}
-                onChange={(e) => setJobDesc(e.target.value)}
-            />
+            <p className='heading'> Resume Evaluator</p>
+            <div className='section-container'>
+                <DragNDrop width='650px' height='410px' setDroppedFile={setUploadedFile} />
+                <textarea
+                    type="text"
+                    placeholder="Enter the job description.."
+                    className='jd-input'
+                    value={jobDesc}
+                    onChange={(e) => setJobDesc(e.target.value)}
+                />
+            </div>
             <CustomButton text="Evaluate" onClick={onClickEvalBtn}></CustomButton>
         </div>
     )

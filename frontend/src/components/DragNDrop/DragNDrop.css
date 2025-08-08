@@ -1,0 +1,22 @@
+.file-box {
+    border: 3px dashed #878787;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    background-color: #eef2ff;
+    transition: background-color 0.2s ease;
+    color: black;
+    font-size: 18px;
+}
+
+.file-box:hover {
+    border: 3px dashed #878787;
+    background-color: #eef2ff; 
+}
+
+.file-box.drag-hover {
+    border: 3px dashed #555555;
+    background-color: #b7b9c2;
+}
