@@ -9,7 +9,6 @@ const DragNDrop = (props) => {
         e.preventDefault();
         if (e.dataTransfer.items && e.dataTransfer.items[0].kind === 'file' && e.dataTransfer.items[0].type === 'application/pdf')
             setIsDraggingFile(true);
-
     };
 
     const handleDragLeave = () => {

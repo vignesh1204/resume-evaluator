@@ -5,7 +5,7 @@
     flex-direction: column;
     justify-content: flex-start;
     align-items: center;
-    background: linear-gradient(to bottom right, #6B7280, #1F2937);
+    background: linear-gradient(to bottom right, #27437a, #19212d);
     color: white;
 }
 
@@ -39,5 +39,11 @@
     resize: none;
     padding-top: 1rem;
     vertical-align: top;
+}
+
+.result-container {
+    color: black;
+    padding-left: 50px;
+    padding-right: 50px;
 }
 
