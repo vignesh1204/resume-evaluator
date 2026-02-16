@@ -1,172 +1,360 @@
-import React, { useState } from 'react';
-import pdfToText from 'react-pdftotext'
+import React, { useEffect, useMemo, useState } from 'react';
+import pdfToText from 'react-pdftotext';
 
 import CustomButton from '../Button/CustomButton';
 import DragNDrop from '../DragNDrop/DragNDrop';
 
 import './MainPage.css';
-import { style } from 'd3';
 
 const MainPage = () => {
-    const [uploadedFile, setUploadedFile] = useState(null);
-    const [jobDesc, setJobDesc] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [result, setResult] = useState(null);
-    const [error, setError] = useState(null);
+  const [uploadedFile, setUploadedFile] = useState(null);
+  const [jobDescLink, setJobDescLink] = useState('');
 
-    const onClickEvalBtn = async () => {
-        console.log("Uploaded file:", uploadedFile);
-        setIsLoading(true);
-        setError(null);
-        setResult(null);
-        
-        try {
-            
-            const resume = await pdfToText(uploadedFile);
-            console.log("Extracted resume text:", resume.substring(0, 200)); 
-            
-            
-            const response = await fetch('http://localhost:5000/evaluate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    resume: resume, 
-                    job_description: jobDesc 
-                })
-            });
+  // paste JD fallback
+  const [showPasteJd, setShowPasteJd] = useState(false);
+  const [pastedJdText, setPastedJdText] = useState('');
 
-            console.log("Response status:", response.status);
-            
-            if (!response.ok) {
-                
-                const errorText = await response.text();
-                console.error("Server error response:", errorText);
-                throw new Error(`Server error (${response.status}): ${errorText}`);
-            }
+  // loading states
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-            const data = await response.json();
-            console.log("Success! Received data:", data);
-            
-            if (data.result) {
-                setResult(data.result);
-                if (data.warning) {
-                    console.warn("Warning:", data.warning);
-                }
-            } else {
-                throw new Error("No result data received from server");
-            }
-            
-        } catch (error) {
-            console.error("Error during evaluation:", error);
-            setError(error.message);
-        } finally {
-            setIsLoading(false);
-        }
+  // outputs
+  const [updatedResumeJson, setUpdatedResumeJson] = useState(null);
+  const [keywordsAdded, setKeywordsAdded] = useState([]);
+
+  // PDF preview state
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
+  const [pdfBlob, setPdfBlob] = useState(null);
+
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewUrl) window.URL.revokeObjectURL(pdfPreviewUrl);
+    };
+  }, [pdfPreviewUrl]);
+
+  const getCompanyFromUrl = (url) => {
+    try {
+      const host = new URL(url).hostname.replace('www.', '');
+      const base = host.split('.')[0] || 'Company';
+      return base.charAt(0).toUpperCase() + base.slice(1);
+    } catch {
+      return 'Company';
     }
+  };
 
-    const renderResult = () => {
-        if (!result) return null;
+  const getNameFromUpdatedJson = (json) => {
+    if (!json) return 'Resume';
+    if (json.resume && json.resume.name) return String(json.resume.name).trim().split(' ')[0] || 'Resume';
+    if (json.name) return String(json.name).trim().split(' ')[0] || 'Resume';
+    return 'Resume';
+  };
 
-        return (
-            <div className="result-container" style={{
-                marginTop: '20px',
-                border: '1px solid #ccc',
-                borderRadius: '8px',
-                backgroundColor: '#f9f9f9',
-            }}>
-                <h3>Evaluation Result</h3>
-                <div><strong>Score:</strong> {result.Score}</div>
-                
-                <div style={{ marginTop: '15px' }}>
-                    <strong>Strengths:</strong>
-                    <ul>
-                        {result.Strengths?.map((strength, index) => (
-                            <li key={index}>{strength}</li>
-                        ))}
-                    </ul>
-                </div>
-                
-                <div style={{ marginTop: '15px' }}>
-                    <strong>Weaknesses:</strong>
-                    <ul>
-                        {result.Weaknesses?.map((weakness, index) => (
-                            <li key={index}>{weakness}</li>
-                        ))}
-                    </ul>
-                </div>
-                
-                <div style={{ marginTop: '15px' }}>
-                    <strong>Actionable Improvements:</strong>
-                    <ul>
-                        {result.Actionable_Improvements?.map((improvement, index) => (
-                            <li key={index}>{improvement}</li>
-                        ))}
-                    </ul>
-                </div>
+  const downloadFileName = useMemo(() => {
+    const name = getNameFromUpdatedJson(updatedResumeJson);
+    const company = getCompanyFromUrl(jobDescLink);
+    return `${name}_${company}_Optimized.pdf`;
+  }, [updatedResumeJson, jobDescLink]);
 
-                {result.raw_analysis && (
-                    <details style={{ marginTop: '15px', color: 'black' }}>
-                        <summary>Raw Analysis (Click to expand)</summary>
-                        <pre style={{ whiteSpace: 'pre-wrap', fontSize: '12px', color: 'black'}}>
-                            {result.raw_analysis}
-                        </pre>
-                    </details>
-                )}
-            </div>
-        );
-    };
+  const resetPdfPreview = () => {
+    if (pdfPreviewUrl) window.URL.revokeObjectURL(pdfPreviewUrl);
+    setPdfPreviewUrl(null);
+    setPdfBlob(null);
+  };
 
-    const renderError = () => {
-        if (!error) return null;
+  const onClickEvalBtn = async () => {
+    setIsEvaluating(true);
+    setError(null);
 
-        return (
-            <div className="error-container" style={{
-                marginTop: '20px',
-                padding: '20px',
-                border: '1px solid #ff6b6b',
-                borderRadius: '8px',
-                backgroundColor: '#ffe0e0',
-                color: '#d63031'
-            }}>
-                <h3>Error</h3>
-                <p>{error}</p>
-                <details>
-                    <summary>Troubleshooting Tips</summary>
-                    <ul>
-                        <li>Make sure your Flask server is running on port 5000</li>
-                        <li>Check the terminal where Flask is running for error messages</li>
-                        <li>Try uploading a different PDF file</li>
-                        <li>Make sure the job description is not empty</li>
-                    </ul>
-                </details>
-            </div>
-        );
-    };
+    setUpdatedResumeJson(null);
+    setKeywordsAdded([]);
+    resetPdfPreview();
 
-    return (
-        <div className='body'>
-            <p className='heading'>Resume Evaluator</p>
-            <div className='section-container'>
-                <DragNDrop width='650px' height='410px' setDroppedFile={setUploadedFile} />
-                <textarea
-                    type="text"
-                    placeholder="Enter the job description.."
-                    className='jd-input'
-                    value={jobDesc}
-                    onChange={(e) => setJobDesc(e.target.value)}
-                />
-            </div>
-            
-            <CustomButton 
-                text={isLoading ? "Evaluating..." : "Evaluate"} 
-                disabled={!uploadedFile || !jobDesc.trim() || isLoading} 
-                onClick={onClickEvalBtn}
-            />
-            
-            {renderError()}
-            {renderResult()}
+    try {
+      if (!uploadedFile) throw new Error('Please upload a resume PDF.');
+      if (!jobDescLink.trim()) throw new Error('Please enter a job description link.');
+
+      const resumeText = await pdfToText(uploadedFile);
+      const resumeJson = { raw_text: resumeText };
+
+      let jdText = '';
+      const extractResp = await fetch('http://localhost:5000/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_description_link: jobDescLink }),
+      });
+
+      if (extractResp.ok) {
+        const extractData = await extractResp.json();
+        jdText = extractData.job_description || '';
+        setShowPasteJd(false);
+      } else if (extractResp.status === 422) {
+        const errData = await extractResp.json().catch(() => ({}));
+        setShowPasteJd(true);
+
+        if (!pastedJdText.trim()) {
+          throw new Error(
+            errData.warning ||
+              'Could not extract job description from the link. Please paste the job description text.'
+          );
+        }
+        jdText = pastedJdText.trim();
+      } else {
+        const errText = await extractResp.text();
+        throw new Error(`JD extraction failed (${extractResp.status}): ${errText}`);
+      }
+
+      const evalResp = await fetch('http://localhost:5000/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resume_json: resumeJson,
+          job_description_link: jobDescLink,
+          job_description_text: jdText,
+        }),
+      });
+
+      if (!evalResp.ok) {
+        const errText = await evalResp.text();
+        throw new Error(`Server error (${evalResp.status}): ${errText}`);
+      }
+
+      const evalData = await evalResp.json();
+      setUpdatedResumeJson(evalData.updated_resume_json || null);
+      setKeywordsAdded(evalData.keywords_added || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
+
+  const onClickGeneratePdfBtn = async () => {
+    setIsGeneratingPdf(true);
+    setError(null);
+
+    resetPdfPreview();
+
+    try {
+      if (!updatedResumeJson) {
+        throw new Error('No updated resume data found. Click Evaluate first.');
+      }
+
+      const resp = await fetch('http://localhost:5000/generate_pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updated_resume_json: updatedResumeJson }),
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`PDF generation failed (${resp.status}): ${errText}`);
+      }
+
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      setPdfBlob(blob);
+      setPdfPreviewUrl(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const onClickDownloadBtn = () => {
+    try {
+      if (!pdfBlob || !pdfPreviewUrl) throw new Error('Generate the PDF preview first.');
+      const a = document.createElement('a');
+      a.href = pdfPreviewUrl;
+      a.download = downloadFileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const canEvaluate = !!uploadedFile && !!jobDescLink.trim() && !isEvaluating && !isGeneratingPdf;
+  const canGeneratePdf = !!updatedResumeJson && !isGeneratingPdf && !isEvaluating;
+  const canDownload = !!pdfPreviewUrl && !!pdfBlob && !isGeneratingPdf && !isEvaluating;
+
+  const statusText = useMemo(() => {
+    if (isEvaluating) return 'Evaluating resume…';
+    if (isGeneratingPdf) return 'Generating PDF preview…';
+    if (pdfPreviewUrl) return 'PDF preview ready.';
+    if (updatedResumeJson) return 'Updated resume ready. Generate a PDF preview.';
+    return 'Upload your resume and paste a job link to begin.';
+  }, [isEvaluating, isGeneratingPdf, pdfPreviewUrl, updatedResumeJson]);
+
+  return (
+    <div className="body">
+      <div className="topbar">
+        <div className="brand">
+          <div className="brand-title">Resume Evaluator</div>
+          <div className="brand-subtitle">Optimize your resume for a job link and preview the updated PDF.</div>
         </div>
-    )
-}
+        <div className="status-pill" aria-live="polite">
+          <span className={`dot ${isEvaluating || isGeneratingPdf ? 'dot-live' : ''}`} />
+          {statusText}
+        </div>
+      </div>
+
+      <div className="layout">
+        {/* LEFT */}
+        <div className="left-panel">
+          <div className="card">
+            <div className="card-header">
+              <h2>Inputs</h2>
+              <p>Enter a job link, upload a resume, then evaluate.</p>
+            </div>
+
+            <div className="field">
+              <label className="label">Job description link</label>
+              <textarea
+                type="text"
+                placeholder="Paste job link here (e.g., careers page URL)…"
+                className="jd-input"
+                value={jobDescLink}
+                onChange={(e) => setJobDescLink(e.target.value)}
+              />
+              <div className="helper">
+                If the link can’t be extracted, you’ll be asked to paste the job description text.
+              </div>
+            </div>
+
+            {showPasteJd && (
+              <div className="field">
+                <label className="label">Paste job description text</label>
+                <textarea
+                  placeholder="We couldn't extract the JD from the link. Paste the full job description text here…"
+                  className="jd-paste"
+                  value={pastedJdText}
+                  onChange={(e) => setPastedJdText(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="field">
+              <label className="label">Resume PDF</label>
+              <div className="dropwrap">
+                {/* Reduced by ~25% */}
+                <DragNDrop width="490px" height="285px" setDroppedFile={setUploadedFile} />
+              </div>
+              <div className="helper">
+                {uploadedFile ? (
+                  <span>
+                    Selected: <strong>{uploadedFile.name}</strong>
+                  </span>
+                ) : (
+                  <span>Drag and drop a PDF, or click to select.</span>
+                )}
+              </div>
+            </div>
+
+            <div className="actions">
+              <div className="actions-row">
+                <CustomButton
+                  text={isEvaluating ? 'Evaluating…' : 'Evaluate'}
+                  disabled={!canEvaluate}
+                  onClick={onClickEvalBtn}
+                />
+                <CustomButton
+                  text={isGeneratingPdf ? 'Generating…' : 'Generate PDF Preview'}
+                  disabled={!canGeneratePdf}
+                  onClick={onClickGeneratePdfBtn}
+                />
+              </div>
+              <div className="actions-note">
+                Step 1: Evaluate → Step 2: Generate PDF Preview → Step 3: Download
+              </div>
+            </div>
+
+            {error && (
+              <div className="alert" role="alert">
+                <div className="alert-title">Something went wrong</div>
+                <div className="alert-text">{error}</div>
+                <details className="alert-details">
+                  <summary>Troubleshooting tips</summary>
+                  <ul>
+                    <li>Check Flask logs for LaTeX compile errors</li>
+                    <li>Some job sites block extraction — paste JD text and try again</li>
+                    <li>Ensure template files exist in backend/templates</li>
+                  </ul>
+                </details>
+              </div>
+            )}
+          </div>
+
+          <div className="card card-compact">
+            <div className="card-header compact">
+              <h2>Keywords Added</h2>
+              <p>What we inserted and where.</p>
+            </div>
+
+            {keywordsAdded && keywordsAdded.length > 0 ? (
+              <div className="keywords-list">
+                {keywordsAdded.map((k, idx) => (
+                  <div className="keyword-row" key={idx}>
+                    <div className="keyword-pill">{k.keyword}</div>
+                    <div className="keyword-meta">
+                      <span className="badge">{k.location}</span>
+                      <span className="where">{k.where}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty">Evaluate to see keywords added for this job.</div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT */}
+        <div className="right-panel">
+          <div className="card preview-card">
+            <div className="card-header preview-header">
+              <div>
+                <h2>PDF Preview</h2>
+                <p>Generate the PDF to preview it here.</p>
+              </div>
+              <div className="filechip" title={downloadFileName}>
+                {downloadFileName}
+              </div>
+            </div>
+
+            <div className="preview-body">
+              {pdfPreviewUrl ? (
+                <iframe title="Resume Preview" src={pdfPreviewUrl} className="pdf-frame" />
+              ) : (
+                <div className="preview-placeholder">
+                  <div className="placeholder-title">No preview yet</div>
+                  <div className="placeholder-text">
+                    Click <strong>Generate PDF Preview</strong> after evaluation.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="preview-footer">
+              <CustomButton text="Download Updated Resume" disabled={!canDownload} onClick={onClickDownloadBtn} />
+              <div className="footer-help">Download becomes available after the preview is generated.</div>
+            </div>
+          </div>
+
+          <div className="hint-card">
+            <div className="hint-title">Pro tip</div>
+            <div className="hint-text">
+              If a job site blocks extraction, paste the job description text manually. It improves reliability.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default MainPage;

@@ -1,0 +1,28 @@
+# Don’t copy local env/venv/cache
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git
+.git
+.gitignore
+
+# OS junk
+.DS_Store
+
+# Node (not needed for backend image)
+node_modules/
+frontend/
+
+# PDFs and LaTeX build outputs
+*.pdf
+*.log
+*.aux
+*.out
+*.toc
