@@ -6,26 +6,19 @@ import DragNDrop from '../DragNDrop/DragNDrop';
 
 import './MainPage.css';
 
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://localhost:5000";
+
 const MainPage = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [jobDescLink, setJobDescLink] = useState('');
-
-  // paste JD fallback
   const [showPasteJd, setShowPasteJd] = useState(false);
   const [pastedJdText, setPastedJdText] = useState('');
-
-  // loading states
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-
-  // outputs
   const [updatedResumeJson, setUpdatedResumeJson] = useState(null);
   const [keywordsAdded, setKeywordsAdded] = useState([]);
-
-  // PDF preview state
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
   const [pdfBlob, setPdfBlob] = useState(null);
-
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -79,7 +72,7 @@ const MainPage = () => {
       const resumeJson = { raw_text: resumeText };
 
       let jdText = '';
-      const extractResp = await fetch('http://localhost:5000/extract', {
+      const extractResp = await fetch(`${API_BASE}/extract`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_description_link: jobDescLink }),
@@ -105,7 +98,7 @@ const MainPage = () => {
         throw new Error(`JD extraction failed (${extractResp.status}): ${errText}`);
       }
 
-      const evalResp = await fetch('http://localhost:5000/evaluate', {
+      const evalResp = await fetch(`${API_BASE}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -141,7 +134,7 @@ const MainPage = () => {
         throw new Error('No updated resume data found. Click Evaluate first.');
       }
 
-      const resp = await fetch('http://localhost:5000/generate_pdf', {
+      const resp = await fetch(`${API_BASE}/generate_pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ updated_resume_json: updatedResumeJson }),
@@ -241,7 +234,6 @@ const MainPage = () => {
             <div className="field">
               <label className="label">Resume PDF</label>
               <div className="dropwrap">
-                {/* Reduced by ~25% */}
                 <DragNDrop width="490px" height="285px" setDroppedFile={setUploadedFile} />
               </div>
               <div className="helper">
