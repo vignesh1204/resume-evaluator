@@ -1,18 +1,15 @@
-import React from 'react';
+import React from "react";
 
-import './Homepage.css';
-import HeroSection from '../components/Homepage/HeroSection';
-import InfoSection from '../components/Homepage/InfoSection';
-import ContactSection from '../components/Homepage/ContactSection';
+import HeroSection from "../components/Homepage/HeroSection";
+import InfoSection from "../components/Homepage/InfoSection";
 
 const Homepage = () => {
-    return (
-        <div className="body">
-            <HeroSection />
-            {/* <InfoSection /> */}
-            {/* <ContactSection /> */}
-        </div>
-    );
+  return (
+    <div className="w-full">
+      <HeroSection />
+      <InfoSection />
+    </div>
+  );
 };
 
 export default Homepage;

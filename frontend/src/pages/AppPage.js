@@ -1,12 +1,8 @@
-import React from 'react';
-import MainPage from '../components/AppPage/MainPage';
+import React from "react";
+import EvaluatePage from "../components/AppPage/EvaluatePage";
 
 const AppPage = () => {
-    return (
-        <div>
-            <MainPage/>
-        </div>
-    )
+  return <EvaluatePage />;
 };
 
 export default AppPage;
