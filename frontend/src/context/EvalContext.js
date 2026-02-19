@@ -9,7 +9,7 @@ const STORAGE_KEY = "resume_evaluator_eval_state_v1";
 const DEFAULT_STATE = {
   // user inputs
   jobDescription: "",
-  model: "gpt-4.1-mini",
+  model: "gpt-5.1",
   mode: "fast",
   useCache: true,
 

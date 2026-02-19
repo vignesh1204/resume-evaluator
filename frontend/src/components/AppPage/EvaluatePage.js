@@ -20,9 +20,8 @@ const MODE_OPTIONS = [
 ];
 
 const MODEL_OPTIONS = [
-  { value: "gpt-4.1-mini", label: "gpt-4.1-mini (cheap)" },
-  { value: "gpt-4.1", label: "gpt-4.1" },
-  { value: "gpt-5.2", label: "gpt-5.2 (best)" },
+  { value: "gpt-5.1", label: "gpt-5.1 (cheap)" },
+  { value: "gpt-5.2", label: "gpt-5.2 (quality)" },
 ];
 
 function ScoreCard({ title, score }) {
@@ -54,22 +53,27 @@ function PillList({ title, items }) {
 }
 
 function RewriteList({ items }) {
-  if (!items || items.length === 0) return null;
+  const safeItems = Array.isArray(items) ? items : [];
+
+  if (safeItems.length === 0) return null;
+
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
       <div className="text-sm font-extrabold">Rewrite suggestions</div>
       <div className="mt-3 space-y-3">
-        {items.map((r, i) => (
+        {safeItems.map((r, i) => (
           <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="text-xs text-white/55">{r.target}</div>
-            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <div className="text-xs font-semibold text-white/70">Before</div>
-                <div className="mt-1 text-sm text-white/85 whitespace-pre-wrap">{r.before}</div>
+            <div className="mt-2">
+              <div className="text-xs font-semibold text-white/70">Before</div>
+              <div className="mt-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/85 whitespace-pre-wrap">
+                {r.before}
               </div>
-              <div>
-                <div className="text-xs font-semibold text-white/70">After</div>
-                <div className="mt-1 text-sm text-white/85 whitespace-pre-wrap">{r.after}</div>
+            </div>
+            <div className="mt-2">
+              <div className="text-xs font-semibold text-white/70">After</div>
+              <div className="mt-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/85 whitespace-pre-wrap">
+                {r.after}
               </div>
             </div>
             {r.reason && (
@@ -91,10 +95,7 @@ export default function EvaluatePage() {
   const [file, setFile] = useState(null);
   const [jd, setJd] = useState(evalState.jobDescription || "");
   const [mode, setMode] = useState(evalState.mode || "fast");
-  const [model, setModel] = useState(evalState.model || "gpt-4.1-mini");
-  const [useCache, setUseCache] = useState(
-    typeof evalState.useCache === "boolean" ? evalState.useCache : true
-  );
+  const [model, setModel] = useState(evalState.model || "gpt-5.1");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -135,7 +136,7 @@ export default function EvaluatePage() {
         jobDescription: jd,
         model,
         mode,
-        useCache,
+        useCache: true,
       });
 
       if (progressIntervalRef.current) {
@@ -158,7 +159,7 @@ export default function EvaluatePage() {
         jobDescription: jd,
         model,
         mode,
-        useCache,
+        useCache: true,
         resumeFileName: file?.name || "",
         analysis: result,
 
@@ -190,7 +191,7 @@ export default function EvaluatePage() {
     } finally {
       setBusy(false);
     }
-  }, [file, jd, model, mode, useCache, setEvalState]);
+  }, [file, jd, model, mode, setEvalState]);
 
   const originalScore = analysis?.original?.ats?.score ?? null;
   const optimizedScore = analysis?.optimized?.ats?.score ?? null;
@@ -297,16 +298,6 @@ export default function EvaluatePage() {
                 </div>
               </div>
 
-              <label className="mt-4 flex items-center gap-3 text-sm text-white/80">
-                <input
-                  type="checkbox"
-                  checked={useCache}
-                  onChange={(e) => setUseCache(e.target.checked)}
-                  className="h-4 w-4 accent-cyan-300"
-                />
-                Use cache (saves money while iterating)
-              </label>
-
               <div className="mt-5">
                 <CustomButton
                   text={busy ? "Analyzing…" : "Analyze"}
@@ -329,7 +320,7 @@ export default function EvaluatePage() {
                   </div>
                 )}
                 <div className="mt-2 text-xs text-white/55">
-                  Tip: start with <span className="font-semibold">gpt-4.1-mini</span> + fast.
+                  Tip: start with <span className="font-semibold">gpt-5.1</span> + fast.
                 </div>
               </div>
 

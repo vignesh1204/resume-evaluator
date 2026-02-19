@@ -63,6 +63,58 @@ def latex_escape(s: str) -> str:
     return out
 
 
+class _KeywordBoldener:
+    """
+    Bold up to max_keywords unique keyword matches across the whole resume.
+    Only bolds keywords already present in text (no content injection).
+    """
+
+    _FALLBACK = [
+        "SQL", "Python", "RAG", "API", "APIs", "Tableau", "Power BI", "Snowflake",
+        "React", "Spring Boot", "Kubernetes", "Docker", "AWS", "GraphQL",
+        "PostgreSQL", "MongoDB", "LLM", "REST", "Selenium", "JUnit",
+    ]
+
+    def __init__(self, candidates: Optional[List[str]], max_keywords: int = 10):
+        self.max_keywords = max_keywords
+        self.used = set()
+        ordered: List[str] = []
+        for src in (candidates or []) + self._FALLBACK:
+            kw = str(src or "").strip()
+            if not kw:
+                continue
+            key = kw.lower()
+            if key in self.used:
+                continue
+            self.used.add(key)
+            ordered.append(kw)
+        self.used.clear()
+        self.keywords = sorted(ordered, key=len, reverse=True)
+
+    def apply(self, text: str) -> str:
+        if not text:
+            return ""
+        raw = text
+        for kw in self.keywords:
+            if len(self.used) >= self.max_keywords:
+                break
+            key = kw.lower()
+            if key in self.used:
+                continue
+            pat = re.compile(rf"(?<![A-Za-z0-9])({re.escape(kw)})(?![A-Za-z0-9])", re.IGNORECASE)
+            m = pat.search(raw)
+            if not m:
+                continue
+            start, end = m.span(1)
+            raw = raw[:start] + "@@BOPEN@@" + raw[start:end] + "@@BCLOSE@@" + raw[end:]
+            self.used.add(key)
+
+        escaped = latex_escape(raw)
+        escaped = escaped.replace("@@BOPEN@@", r"{\bf ")
+        escaped = escaped.replace("@@BCLOSE@@", "}")
+        return escaped
+
+
 # -----------------------------
 # Apply section order + enabled
 # -----------------------------
@@ -237,18 +289,28 @@ def _subsection_inline_content(sub_blocks: List[Any]) -> str:
     return ", ".join(parts)
 
 
-def _header_line(left: str, right: str, bold_left: bool) -> str:
+def _header_line(left: str, right: str, bold_left: bool, education_mode: bool) -> str:
     """
     Render a header row at slightly reduced font size:
     left text (bold or italic) + right-aligned meta.
     """
-    left_tex = (r"{\bf " + left + r"}") if bold_left else (r"{\em " + left + r"}")
+    if bold_left:
+        left_tex = r"{\bf " + left + r"}"
+    else:
+        left_tex = left if education_mode else (r"{\em " + left + r"}")
     if right:
         return r"{\small " + left_tex + r" \hfill " + right + r"}"
     return r"{\small " + left_tex + r"}"
 
 
-def _subsection_header_rows(subsection_title: str, sub_blocks: List[Any]) -> List[str]:
+def _subsection_header_rows(
+    subsection_title: str,
+    sub_blocks: List[Any],
+    *,
+    education_mode: bool,
+    boldener: Optional[_KeywordBoldener],
+    enable_bullet_bold: bool,
+) -> List[str]:
     """
     Render subsection header rows with flexible (left, right) pairing.
     Each (left, meta) pair is one row. Title row is bold, subsequent rows italic.
@@ -260,7 +322,10 @@ def _subsection_header_rows(subsection_title: str, sub_blocks: List[Any]) -> Lis
     seen_bullets = False
 
     def _flush_left(bold: bool) -> str:
-        left_tex = (r"{\bf " + current_left + r"}") if bold else (r"{\em " + current_left + r"}")
+        if bold:
+            left_tex = r"{\bf " + current_left + r"}"
+        else:
+            left_tex = current_left if education_mode else (r"{\em " + current_left + r"}")
         return r"{\small " + left_tex + r"}"
 
     for blk in sub_blocks or []:
@@ -270,7 +335,7 @@ def _subsection_header_rows(subsection_title: str, sub_blocks: List[Any]) -> Lis
         if t == "meta":
             meta_txt = latex_escape(str(blk.get("text", "")).strip())
             if current_left is not None:
-                out.append(_header_line(current_left, meta_txt, left_is_title))
+                out.append(_header_line(current_left, meta_txt, left_is_title, education_mode))
                 current_left = None
                 left_is_title = False
             elif meta_txt:
@@ -291,7 +356,11 @@ def _subsection_header_rows(subsection_title: str, sub_blocks: List[Any]) -> Lis
             out.append(r"\begin{tightitemize}")
             for it in (blk.get("items") or []):
                 if isinstance(it, str) and it.strip():
-                    out.append(r"\item " + latex_escape(it.strip()))
+                    if enable_bullet_bold and boldener:
+                        item_txt = boldener.apply(it.strip())
+                    else:
+                        item_txt = latex_escape(it.strip())
+                    out.append(r"\item " + item_txt)
             out.append(r"\end{tightitemize}")
 
     if current_left is not None and not seen_bullets:
@@ -300,8 +369,16 @@ def _subsection_header_rows(subsection_title: str, sub_blocks: List[Any]) -> Lis
     return out
 
 
-def _blocks_to_latex(blocks: List[Any]) -> List[str]:
+def _blocks_to_latex(
+    blocks: List[Any],
+    *,
+    section_title: str = "",
+    boldener: Optional[_KeywordBoldener] = None,
+) -> List[str]:
     out: List[str] = []
+    section_lower = section_title.lower()
+    section_is_skills = any(hint in section_lower for hint in _SKILLS_SECTION_HINTS)
+    enable_bullet_bold = not section_is_skills
     for b in blocks or []:
         if not isinstance(b, dict):
             continue
@@ -316,8 +393,15 @@ def _blocks_to_latex(blocks: List[Any]) -> List[str]:
             if txt:
                 out.append(r"{" + txt + r"}")
         elif t == "bullets":
-            items = b.get("items", []) or []
-            items = [latex_escape(str(x).strip()) for x in items if isinstance(x, str) and x.strip()]
+            raw_items = b.get("items", []) or []
+            items = []
+            for x in raw_items:
+                if not isinstance(x, str) or not x.strip():
+                    continue
+                if enable_bullet_bold and boldener:
+                    items.append(boldener.apply(str(x).strip()))
+                else:
+                    items.append(latex_escape(str(x).strip()))
             if items:
                 out.append(r"\begin{tightitemize}")
                 for it in items:
@@ -331,20 +415,28 @@ def _blocks_to_latex(blocks: List[Any]) -> List[str]:
                 if content:
                     out.append(r"{\small {\bf " + title + r"} " + content + r"} \\")
             else:
-                out.extend(_subsection_header_rows(title, sub_blocks))
+                out.extend(
+                    _subsection_header_rows(
+                        title,
+                        sub_blocks,
+                        education_mode=("education" in section_title.lower()),
+                        boldener=boldener,
+                        enable_bullet_bold=enable_bullet_bold,
+                    )
+                )
         else:
             continue
 
     return out
 
 
-def skeleton_to_latex_body(resume: Dict[str, Any]) -> str:
+def skeleton_to_latex_body(resume: Dict[str, Any], *, boldener: Optional[_KeywordBoldener] = None) -> str:
     """
     Builds LaTeX body from the resume skeleton. Structure is preserved: section
     and subsection titles, inline vs bullets, and block layout come from the
     skeleton (user's resume). We only apply visual style (font, spacing, rules)
     via resume.cls; no hardcoded section names or layout.
-    Uses \\vfill between sections so content stretches to fill one full page.
+    Keeps natural section flow with compact spacing (no forced \\vfill gaps).
     """
     lines: List[str] = []
 
@@ -352,7 +444,6 @@ def skeleton_to_latex_body(resume: Dict[str, Any]) -> str:
     if not isinstance(sections, list):
         sections = []
 
-    rendered_count = 0
     for sec in sections:
         if not isinstance(sec, dict):
             continue
@@ -360,17 +451,13 @@ def skeleton_to_latex_body(resume: Dict[str, Any]) -> str:
         if not title:
             continue
 
-        if rendered_count > 0:
-            lines.append(r"\vfill")
-
         lines.append(r"\begin{rSection}{" + title + r"}")
 
         blocks = sec.get("blocks", []) or []
         if isinstance(blocks, list):
-            lines.extend(_blocks_to_latex(blocks))
+            lines.extend(_blocks_to_latex(blocks, section_title=title, boldener=boldener))
 
         lines.append(r"\end{rSection}")
-        rendered_count += 1
 
     return "\n".join(lines).strip() + "\n"
 
@@ -433,7 +520,11 @@ def _derive_name_and_contact(resume: Dict[str, Any]) -> tuple[str, str]:
     return (name, contact)
 
 
-def render_main_tex_from_template(resume: Dict[str, Any]) -> str:
+def render_main_tex_from_template(
+    resume: Dict[str, Any],
+    *,
+    highlight_keywords: Optional[List[str]] = None,
+) -> str:
     if not os.path.exists(TEMPLATE_TEX_PATH):
         raise FileNotFoundError(f"Missing template.tex at: {TEMPLATE_TEX_PATH}")
     if not os.path.exists(RESUME_CLS_PATH):
@@ -442,7 +533,8 @@ def render_main_tex_from_template(resume: Dict[str, Any]) -> str:
     with open(TEMPLATE_TEX_PATH, "r", encoding="utf-8") as f:
         template_tex = f.read()
 
-    body = skeleton_to_latex_body(resume)
+    boldener = _KeywordBoldener(highlight_keywords, max_keywords=10)
+    body = skeleton_to_latex_body(resume, boldener=boldener)
     name, contact = _derive_name_and_contact(resume)
 
     # Replace tokens exactly as provided
@@ -462,8 +554,12 @@ def render_main_tex_from_template(resume: Dict[str, Any]) -> str:
 # Compile LaTeX -> PDF bytes
 # -----------------------------
 
-def compile_pdf_from_skeleton(resume: Dict[str, Any]) -> bytes:
-    main_tex = render_main_tex_from_template(resume)
+def compile_pdf_from_skeleton(
+    resume: Dict[str, Any],
+    *,
+    highlight_keywords: Optional[List[str]] = None,
+) -> bytes:
+    main_tex = render_main_tex_from_template(resume, highlight_keywords=highlight_keywords)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Copy resume.cls because template references \documentclass{resume}

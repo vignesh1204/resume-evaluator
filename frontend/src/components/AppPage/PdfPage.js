@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../Button/CustomButton";
 import { useEval } from "../../context/EvalContext";
@@ -17,98 +17,49 @@ function deriveSectionOrderFromCanonical(resumeCanonical) {
   return resumeCanonical.sections.map((s) => String(s?.id || "")).filter((id) => id.trim());
 }
 
-/**
- * Word-diff with simple LCS to highlight:
- * - added tokens => green
- * - replacements (a delete adjacent to an insert) => yellow
- * We don't show deletions at all.
- */
-function diffTokens(before, after) {
-  const a = String(before || "").split(/\s+/).filter(Boolean);
-  const b = String(after || "").split(/\s+/).filter(Boolean);
-
-  const n = a.length;
-  const m = b.length;
-
-  // LCS dp (small strings only; resumes are fine)
-  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-
-  // build ops
-  let i = 0,
-    j = 0;
-  const ops = [];
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      ops.push({ t: "eq", w: b[j] });
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push({ t: "del", w: a[i] });
-      i++;
-    } else {
-      ops.push({ t: "ins", w: b[j] });
-      j++;
-    }
-  }
-  while (i < n) ops.push({ t: "del", w: a[i++] });
-  while (j < m) ops.push({ t: "ins", w: b[j++] });
-
-  // classify insertions as replace if near deletions
-  const spans = [];
-  for (let k = 0; k < ops.length; k++) {
-    const op = ops[k];
-
-    if (op.t === "eq") {
-      spans.push({ kind: "plain", text: op.w });
-      continue;
-    }
-
-    if (op.t === "ins") {
-      const prevIsDel = k > 0 && ops[k - 1].t === "del";
-      const nextIsDel = k + 1 < ops.length && ops[k + 1].t === "del";
-      const kind = prevIsDel || nextIsDel ? "replace" : "add";
-      spans.push({ kind, text: op.w });
-      continue;
-    }
-
-    // deletions are not displayed (per requirement)
-  }
-
-  return spans;
+function tokenizeWithWhitespace(s) {
+  return String(s || "").match(/\S+|\s+/g) || [];
 }
 
-function HighlightedAfter({ before, after }) {
-  const spans = useMemo(() => diffTokens(before, after), [before, after]);
-  return (
-    <div className="text-sm text-white/90 leading-relaxed whitespace-pre-wrap">
-      {spans.map((s, idx) => {
-        if (s.kind === "plain") return <span key={idx}>{s.text} </span>;
-        if (s.kind === "add")
-          return (
-            <mark
-              key={idx}
-              className="rounded-md px-1 py-0.5 bg-emerald-300/20 text-emerald-100 ring-1 ring-emerald-200/20"
-            >
-              {s.text}{" "}
-            </mark>
-          );
-        // replace
-        return (
-          <mark
-            key={idx}
-            className="rounded-md px-1 py-0.5 bg-amber-300/20 text-amber-100 ring-1 ring-amber-200/20"
-          >
-            {s.text}{" "}
-          </mark>
-        );
-      })}
-    </div>
-  );
+function buildInlineDiff(beforeText, afterText) {
+  const a = tokenizeWithWhitespace(beforeText);
+  const b = tokenizeWithWhitespace(afterText);
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+
+  for (let i = m - 1; i >= 0; i -= 1) {
+    for (let j = n - 1; j >= 0; j -= 1) {
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      ops.push({ kind: "equal", text: a[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ kind: "del", text: a[i] });
+      i += 1;
+    } else {
+      ops.push({ kind: "add", text: b[j] });
+      j += 1;
+    }
+  }
+  while (i < m) {
+    ops.push({ kind: "del", text: a[i] });
+    i += 1;
+  }
+  while (j < n) {
+    ops.push({ kind: "add", text: b[j] });
+    j += 1;
+  }
+  return ops;
 }
 
 const Modal = ({ open, onClose, children }) => {
@@ -163,6 +114,8 @@ export default function PdfPage() {
 
   const rewriteSuggestions = evalState?.analysis?.improvements?.rewrite_suggestions || [];
   const keywordsSuggested = evalState?.analysis?.improvements?.missing_keywords || [];
+  const [suggestionDrafts, setSuggestionDrafts] = useState([]);
+  const [editingSuggestions, setEditingSuggestions] = useState([]);
 
   useEffect(() => {
     if (!hasEval) return;
@@ -183,6 +136,12 @@ export default function PdfPage() {
       setEnabledMap(m);
     }
   }, [hasEval, evalState.resumeCanonical]);
+
+  useEffect(() => {
+    const rows = Array.isArray(rewriteSuggestions) ? rewriteSuggestions : [];
+    setSuggestionDrafts(rows.map((r) => r?.after || ""));
+    setEditingSuggestions(rows.map(() => false));
+  }, [rewriteSuggestions]);
 
   useEffect(() => {
     return () => {
@@ -335,51 +294,6 @@ export default function PdfPage() {
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[420px_1fr]">
             {/* Left: controls + changes */}
             <div className="space-y-6">
-              <div className="noir-card rounded-3xl p-5 sm:p-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-extrabold">Generate</div>
-                    <div className="mt-1 text-sm noir-muted">
-                      Uses the optimized resume + injects all missing keywords.
-                    </div>
-                  </div>
-                  <span className="rounded-full border border-emerald-200/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">
-                    Auto-applied ✓
-                  </span>
-                </div>
-
-                <div className="mt-5">
-                  <CustomButton
-                    text={isGenerating ? "Generating…" : "Generate PDF"}
-                    disabled={!canGenerate}
-                    onClick={onClickGenerate}
-                    className="w-full noir-btn"
-                  />
-                </div>
-
-                {isGenerating && (
-                  <div className="mt-5">
-                    <div className="flex items-center justify-between text-xs text-white/70">
-                      <span>Working…</span>
-                      <span>{progress}%</span>
-                    </div>
-                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-cyan-300/80 transition-[width] duration-300"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {error && (
-                  <div className="mt-5 rounded-2xl border border-rose-300/30 bg-rose-300/10 p-4 text-rose-100">
-                    <div className="font-extrabold">Error</div>
-                    <div className="mt-1 text-sm leading-relaxed">{error}</div>
-                  </div>
-                )}
-              </div>
-
               {/* Section order (keep, but compact) */}
               <div className="noir-card rounded-3xl p-5 sm:p-6">
                 <div className="text-sm font-extrabold">Sections</div>
@@ -440,23 +354,69 @@ export default function PdfPage() {
                     <div className="text-xs noir-muted">{rewriteSuggestions.length} edits</div>
                   </div>
                   <div className="mt-2 text-xs noir-muted">
-                    Green = added, Yellow = replaced. (Removals are not shown.)
+                    Red strikethrough = removed, Yellow = replaced, Green = added.
                   </div>
 
                   <div className="mt-4 space-y-3">
                     {rewriteSuggestions.slice(0, 10).map((r, i) => (
                       <div key={i} className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          <div>
-                            <div className="text-xs font-semibold text-white/70">Before</div>
-                            <div className="mt-1 text-sm text-white/85 whitespace-pre-wrap">{r.before}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs font-semibold text-white/70">After</div>
-                            <div className="mt-1">
-                              <HighlightedAfter before={r.before} after={r.after} />
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-white/55">{r.target}</div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingSuggestions((prev) => {
+                                const next = [...prev];
+                                next[i] = !next[i];
+                                return next;
+                              })
+                            }
+                            className="rounded-md border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold text-white/80 hover:bg-black/40"
+                          >
+                            {editingSuggestions[i] ? "Done" : "Edit"}
+                          </button>
+                        </div>
+                        <div className="mt-2">
+                          {editingSuggestions[i] ? (
+                            <textarea
+                              value={suggestionDrafts[i] || ""}
+                              onChange={(e) =>
+                                setSuggestionDrafts((prev) => {
+                                  const next = [...prev];
+                                  next[i] = e.target.value;
+                                  return next;
+                                })
+                              }
+                              rows={4}
+                              className="w-full rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white/90 outline-none focus:border-white/20"
+                            />
+                          ) : (
+                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/85 whitespace-pre-wrap">
+                              {buildInlineDiff(r.before || "", suggestionDrafts[i] || "").map((part, idx, arr) => {
+                                if (part.kind === "equal") return <span key={idx}>{part.text}</span>;
+                                if (part.kind === "del") {
+                                  return (
+                                    <span key={idx} className="text-rose-300 line-through decoration-rose-300/90">
+                                      {part.text}
+                                    </span>
+                                  );
+                                }
+                                const prevKind = idx > 0 ? arr[idx - 1].kind : "";
+                                const nextKind = idx < arr.length - 1 ? arr[idx + 1].kind : "";
+                                const isReplacement = prevKind === "del" || nextKind === "del";
+                                return (
+                                  <span
+                                    key={idx}
+                                    className={
+                                      isReplacement ? "bg-amber-300/30 text-amber-100" : "bg-emerald-400/25 text-emerald-100"
+                                    }
+                                  >
+                                    {part.text}
+                                  </span>
+                                );
+                              })}
                             </div>
-                          </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -468,51 +428,98 @@ export default function PdfPage() {
               )}
             </div>
 
-            {/* Right: preview */}
-            <div className="noir-card rounded-3xl overflow-hidden">
-              <div className="border-b border-white/10 bg-black/20 p-5 sm:p-6">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {/* Right: generate + preview */}
+            <div className="space-y-6">
+              <div className="noir-card rounded-3xl p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-lg font-extrabold">Preview</div>
-                    <div className="mt-1 text-sm noir-muted">Generate to preview the final optimized PDF.</div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsFullPreview(true)}
-                      disabled={!pdfPreviewUrl}
-                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-40"
-                    >
-                      Fullscreen
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white h-[60vh] sm:h-[68vh] lg:h-[720px]">
-                {pdfPreviewUrl ? (
-                  <iframe title="Resume Preview" src={pdfPreviewUrl} className="h-full w-full border-0" />
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-slate-900">
-                    <div className="text-4xl">📄</div>
-                    <div className="text-lg font-extrabold">No preview yet</div>
-                    <div className="max-w-[520px] text-sm text-slate-700">
-                      Click <span className="font-bold">Generate PDF</span> to preview the optimized resume.
+                    <div className="text-sm font-extrabold">Generate</div>
+                    <div className="mt-1 text-sm noir-muted">
+                      Uses the optimized resume + injects all missing keywords.
                     </div>
+                  </div>
+                  <span className="rounded-full border border-emerald-200/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">
+                    Auto-applied ✓
+                  </span>
+                </div>
+
+                <div className="mt-5">
+                  <CustomButton
+                    text={isGenerating ? "Generating…" : "Generate PDF"}
+                    disabled={!canGenerate}
+                    onClick={onClickGenerate}
+                    className="w-full noir-btn"
+                  />
+                </div>
+
+                {isGenerating && (
+                  <div className="mt-5">
+                    <div className="flex items-center justify-between text-xs text-white/70">
+                      <span>Working…</span>
+                      <span>{progress}%</span>
+                    </div>
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-cyan-300/80 transition-[width] duration-300"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="mt-5 rounded-2xl border border-rose-300/30 bg-rose-300/10 p-4 text-rose-100">
+                    <div className="font-extrabold">Error</div>
+                    <div className="mt-1 text-sm leading-relaxed">{error}</div>
                   </div>
                 )}
               </div>
 
-              <div className="border-t border-white/10 bg-black/20 p-5 sm:p-6">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <CustomButton
-                    text="Download PDF"
-                    disabled={!pdfPreviewUrl || !pdfBlob || isGenerating}
-                    onClick={onClickDownload}
-                    className="w-full sm:w-48 noir-btn"
-                  />
-                  <div className="text-xs noir-muted">Download enabled after preview.</div>
+              <div className="noir-card rounded-3xl overflow-hidden">
+                <div className="border-b border-white/10 bg-black/20 p-5 sm:p-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-lg font-extrabold">Preview</div>
+                      <div className="mt-1 text-sm noir-muted">Generate to preview the final optimized PDF.</div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsFullPreview(true)}
+                        disabled={!pdfPreviewUrl}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-40"
+                      >
+                        Fullscreen
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white h-[60vh] sm:h-[68vh] lg:h-[720px]">
+                  {pdfPreviewUrl ? (
+                    <iframe title="Resume Preview" src={pdfPreviewUrl} className="h-full w-full border-0" />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-slate-900">
+                      <div className="text-4xl">📄</div>
+                      <div className="text-lg font-extrabold">No preview yet</div>
+                      <div className="max-w-[520px] text-sm text-slate-700">
+                        Click <span className="font-bold">Generate PDF</span> to preview the optimized resume.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-white/10 bg-black/20 p-5 sm:p-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <CustomButton
+                      text="Download PDF"
+                      disabled={!pdfPreviewUrl || !pdfBlob || isGenerating}
+                      onClick={onClickDownload}
+                      className="w-full sm:w-48 noir-btn"
+                    />
+                    <div className="text-xs noir-muted">Download enabled after preview.</div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -11,7 +11,6 @@ from llm_resume import analyze_resume_one_call, score_resume_skeleton
 
 from pdf_latex import (
     apply_order_and_enabled,
-    inject_keywords_into_skeleton,
     compile_pdf_from_skeleton,
 )
 
@@ -184,7 +183,10 @@ def generate_pdf():
         # Apply ordering + enabled selection
         resume = apply_order_and_enabled(resume, section_order, enabled_ids)
 
-        pdf_bytes = compile_pdf_from_skeleton(resume)
+        pdf_bytes = compile_pdf_from_skeleton(
+            resume,
+            highlight_keywords=keywords,
+        )
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         tmp.write(pdf_bytes)
