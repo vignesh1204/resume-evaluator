@@ -1,8 +1,6 @@
 import React from "react";
-import PdfPageComponent from "../components/AppPage/PdfPage";
+import PdfEditorPage from "../components/AppPage/PdfPage";
 
-const PdfPage = () => {
-  return <PdfPageComponent />;
-};
-
-export default PdfPage;
+export default function PdfPage() {
+  return <PdfEditorPage />;
+}

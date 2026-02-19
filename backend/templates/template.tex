@@ -1,65 +1,43 @@
+% backend/templates/template.tex (uses resume_old.cls style: name/address in preamble)
 \documentclass{resume}
 
-\usepackage[left=0.4 in,top=0.4in,right=0.4 in,bottom=0.4in]{geometry}
-\usepackage{textcomp}
-\newcommand{\tab}[1]{\hspace{.2667\textwidth}\rlap{#1}} 
-\newcommand{\itab}[1]{\hspace{0em}\rlap{#1}}
+\usepackage[left=0.5in,top=0.3in,right=0.5in,bottom=0.3in]{geometry}
+\usepackage{enumitem}
 
-\name{ {{ header.name | latex_escape }} }
-\address{ {% for line in header.contact_lines %}{{ line | latex_escape }}{% if not loop.last %} \\ {% endif %}{% endfor %} }
+% tightitemize: compact bullets matching rSubsection style
+\newlist{tightitemize}{itemize}{1}
+\setlist[tightitemize]{
+  label=$\cdot$,
+  leftmargin=0em,
+  itemsep=0pt,
+  topsep=1pt,
+  parsep=0pt,
+  partopsep=0pt
+}
+
+% Override resume.cls spacing
+\def\sectionskip{\vspace{2pt}}
+\def\sectionlineskip{\vspace{4pt}}
+\def\nameskip{\smallskip}
+\def\addressskip{\vspace{1pt}}
+
+% Replace rSection: no list env, just a group — zero extra vertical space
+\renewenvironment{rSection}[1]{%
+  \sectionskip
+  \MakeUppercase{{\bf #1}}%
+  \sectionlineskip
+  \hrule
+  \vspace{2pt}%
+  \noindent\ignorespaces
+}{%
+  \par
+}
+
+\name{%%__NAME__%%}
+\address{%%__CONTACT__%%}
 
 \begin{document}
-\vspace*{-5mm}
 
-{% if sections is defined and sections and sections|length > 0 %}
-{% for s in sections %}
-
-{% if s.title is defined and s.title %}
-\begin{rSection}{ {{ s.title | latex_escape }} }
-{% endif %}
-
-{% if s.type == 'paragraph' %}
-  {% if s.paragraph is defined and s.paragraph %}
-{{ s.paragraph | latex_escape }}
-  {% endif %}
-{% endif %}
-
-{% if s.type == 'entries' %}
-  {% if s.entries is defined and s.entries and s.entries|length > 0 %}
-    {% for e in s.entries %}
-
-% Header row: left = heading_left, right = heading_right
-\noindent\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l r}
-\textbf{ {{ (e.heading_left if e.heading_left is defined else '') | latex_escape }} } & {\small {{ (e.heading_right if e.heading_right is defined else '') | latex_escape }}} \\
-\end{tabular*}
-
-% Subheader row: left = subheading_left, right = subheading_right
-\noindent\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l r}
-{{ (e.subheading_left if e.subheading_left is defined else '') | latex_escape }} & {\small \textit{ {{ (e.subheading_right if e.subheading_right is defined else '') | latex_escape }} }} \\
-\end{tabular*}
-
-\vspace*{-1mm}
-\begin{itemize}
-\itemsep -3pt {}
-{% if e.bullets is defined and e.bullets and e.bullets|length > 0 %}
-  {% for b in e.bullets %}
-  \item {{ b | latex_escape }}
-  {% endfor %}
-{% endif %}
-\end{itemize}
-\vspace*{-1mm}
-
-    {% endfor %}
-  {% endif %}
-{% endif %}
-
-{% if s.title is defined and s.title %}
-\end{rSection}
-{% endif %}
-
-\vspace*{-2mm}
-
-{% endfor %}
-{% endif %}
+%%__BODY__%%
 
 \end{document}

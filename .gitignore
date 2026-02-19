@@ -22,6 +22,9 @@ venv/
 **/venv/
 **/.venv/
 
+resumes/
+jds/
+
 # ===== OS / Editor =====
 .DS_Store
 Thumbs.db

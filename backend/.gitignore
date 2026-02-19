@@ -1,1 +1,4 @@
 .env
+.cache_resume/
+.cache_score/
+__pycache__/

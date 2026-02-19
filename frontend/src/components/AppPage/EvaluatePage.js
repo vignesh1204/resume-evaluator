@@ -1,418 +1,417 @@
-import React, { useMemo, useState } from "react";
+// frontend/src/components/AppPage/EvaluatePage.js
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import pdfToText from "react-pdftotext";
-
-import DragNDrop from "../DragNDrop/DragNDrop";
 import CustomButton from "../Button/CustomButton";
 import { useEval } from "../../context/EvalContext";
+import { analyzeResumeMultipart } from "../../utils/api";
+import NoirShell from "../layout/NoirShell";
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://localhost:5000";
+// Simulated progress: approaches ~88% over ~60s so we don't hit 100% before the request completes.
+const PROGRESS_CAP = 88;
+const PROGRESS_TAU = 28; // seconds for ~63% of cap
+function progressFromElapsedMs(ms) {
+  const s = ms / 1000;
+  return Math.min(PROGRESS_CAP, PROGRESS_CAP * (1 - Math.exp(-s / PROGRESS_TAU)));
+}
 
-const getCompanyFromUrl = (url) => {
-  try {
-    const host = new URL(url).hostname.replace("www.", "");
-    const base = host.split(".")[0] || "Company";
-    return base.charAt(0).toUpperCase() + base.slice(1);
-  } catch {
-    return "Company";
-  }
-};
+const MODE_OPTIONS = [
+  { value: "fast", label: "Fast (cheaper, quicker)" },
+  { value: "quality", label: "Quality (more thorough)" },
+];
 
-const getNameFromUpdatedJson = (json) => {
-  if (!json) return "Resume";
-  if (json.resume && json.resume.name) return String(json.resume.name).trim().split(" ")[0] || "Resume";
-  if (json.name) return String(json.name).trim().split(" ")[0] || "Resume";
-  return "Resume";
-};
+const MODEL_OPTIONS = [
+  { value: "gpt-4.1-mini", label: "gpt-4.1-mini (cheap)" },
+  { value: "gpt-4.1", label: "gpt-4.1" },
+  { value: "gpt-5.2", label: "gpt-5.2 (best)" },
+];
 
-const PriorityPill = ({ priority }) => {
-  const cls =
-    priority === "High"
-      ? "border-red-200/25 bg-red-300/10 text-red-100"
-      : priority === "Medium"
-      ? "border-amber-200/25 bg-amber-300/10 text-amber-100"
-      : "border-emerald-200/25 bg-emerald-300/10 text-emerald-100";
-
+function ScoreCard({ title, score }) {
   return (
-    <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${cls}`}>
-      {priority || "Info"}
-    </span>
+    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4">
+      <div className="text-xs text-white/60">{title}</div>
+      <div className="mt-1 text-3xl font-extrabold tracking-tight">{score ?? "—"}</div>
+    </div>
   );
-};
+}
 
-const EvaluatePage = () => {
+function PillList({ title, items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="text-sm font-extrabold">{title}</div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {items.map((x, i) => (
+          <span
+            key={`${title}-${i}`}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80"
+          >
+            {x}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RewriteList({ items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="text-sm font-extrabold">Rewrite suggestions</div>
+      <div className="mt-3 space-y-3">
+        {items.map((r, i) => (
+          <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-white/55">{r.target}</div>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-xs font-semibold text-white/70">Before</div>
+                <div className="mt-1 text-sm text-white/85 whitespace-pre-wrap">{r.before}</div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-white/70">After</div>
+                <div className="mt-1 text-sm text-white/85 whitespace-pre-wrap">{r.after}</div>
+              </div>
+            </div>
+            {r.reason && (
+              <div className="mt-2 text-xs text-white/60">
+                Reason: <span className="text-white/80">{r.reason}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function EvaluatePage() {
   const navigate = useNavigate();
-  const { evalState, setEvalState } = useEval();
+  const { evalState, setEvalState, resetEval, hasSession } = useEval();
 
-  const [uploadedFile, setUploadedFile] = useState(null);
+  const [file, setFile] = useState(null);
+  const [jd, setJd] = useState(evalState.jobDescription || "");
+  const [mode, setMode] = useState(evalState.mode || "fast");
+  const [model, setModel] = useState(evalState.model || "gpt-4.1-mini");
+  const [useCache, setUseCache] = useState(
+    typeof evalState.useCache === "boolean" ? evalState.useCache : true
+  );
 
-  const [jdMode, setJdMode] = useState("link"); // "link" | "text"
-  const [jobDescLink, setJobDescLink] = useState("");
-  const [jobDescText, setJobDescText] = useState("");
-
-  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [analysisProgress, setAnalysisProgress] = useState(null); // 0–100 or null when idle
+  const progressIntervalRef = useRef(null);
+  const progressStartRef = useRef(null);
 
-  const hasResult = evalState?.atsScore !== null && evalState?.atsScore !== undefined;
+  const analysis = evalState.analysis;
 
-  const canEvaluate = useMemo(() => {
-    if (isEvaluating) return false;
-    if (!uploadedFile) return false;
-    if (jdMode === "link") return !!jobDescLink.trim();
-    return !!jobDescText.trim();
-  }, [isEvaluating, uploadedFile, jdMode, jobDescLink, jobDescText]);
+  useEffect(() => {
+    return () => {
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    };
+  }, []);
 
-  const onClickEvaluate = async () => {
+  const canAnalyze = useMemo(() => {
+    return !!file && jd.trim().length > 0 && !busy;
+  }, [file, jd, busy]);
+
+  const onAnalyze = useCallback(async () => {
     setError(null);
-    setIsEvaluating(true);
+    setBusy(true);
+    setAnalysisProgress(0);
+    progressStartRef.current = Date.now();
+
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    progressIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - (progressStartRef.current || Date.now());
+      setAnalysisProgress((p) => {
+        const next = progressFromElapsedMs(elapsed);
+        return Math.max(p, Math.round(next));
+      });
+    }, 400);
 
     try {
-      if (!uploadedFile) throw new Error("Please upload a resume PDF.");
-      if (jdMode === "link" && !jobDescLink.trim()) throw new Error("Please paste a job link.");
-      if (jdMode === "text" && !jobDescText.trim()) throw new Error("Please paste the job description text.");
-
-      const resumeText = await pdfToText(uploadedFile);
-      const resumeJson = { raw_text: resumeText };
-
-      const payload = {
-        resume_json: resumeJson,
-        job_description_link: jdMode === "link" ? jobDescLink.trim() : "",
-        job_description_text: jdMode === "text" ? jobDescText.trim() : "",
-        keyword_suggestions_max: 10,
-        changes_max: 5,
-      };
-
-      const resp = await fetch(`${API_BASE}/evaluate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const result = await analyzeResumeMultipart({
+        file,
+        jobDescription: jd,
+        model,
+        mode,
+        useCache,
       });
 
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`Server error (${resp.status}): ${errText}`);
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
       }
+      setAnalysisProgress(100);
+      setTimeout(() => setAnalysisProgress(null), 600);
 
-      const data = await resp.json();
+      const optimizedSkeleton = result?.optimized?.resume || null;
+      const originalScore = result?.original?.ats?.score ?? null;
+      const optimizedScore = result?.optimized?.ats?.score ?? null;
 
-      const atsScore = data.ats_score ?? null;
-      const optimizedAtsScore = data.optimized_ats_score ?? null;
-      const changes = Array.isArray(data.changes) ? data.changes.slice(0, 5) : [];
-      const keywordsSuggested = Array.isArray(data.keywords_suggested) ? data.keywords_suggested.slice(0, 10) : [];
+      const sections = optimizedSkeleton?.sections || [];
+      const derivedOrder = sections.map((s) => s.id).filter(Boolean);
+      const enabled = derivedOrder.slice();
 
-      // IMPORTANT: canonical resume used by PdfPage
-      const resumeCanonical = data.optimized_resume_canonical ?? null;
+      setEvalState((prev) => ({
+        ...prev,
+        jobDescription: jd,
+        model,
+        mode,
+        useCache,
+        resumeFileName: file?.name || "",
+        analysis: result,
 
-      const company = getCompanyFromUrl(jobDescLink);
-      const name = getNameFromUpdatedJson(resumeCanonical?.header ? { resume: { name: resumeCanonical.header.name } } : null);
-      const fileNameHint = `${name}_${company}_Optimized.pdf`;
+        // important: PDF generation should use this canonical optimized skeleton
+        resumeCanonical: optimizedSkeleton,
 
-      setEvalState({
-        jobDescLink: jobDescLink.trim(),
-        jobDescText: jobDescText.trim(),
-        atsScore,
-        optimizedAtsScore,
-        changes,
-        keywordsSuggested,
-        resumeCanonical,
-        generatedFileNameHint: fileNameHint,
-        sectionOrder: [], // will be derived in PdfPage
-        enabledSectionIds: [], // optional
-      });
+        // editable starts as optimized (user can reorder/toggle)
+        editableSkeleton: optimizedSkeleton,
+
+        sectionOrder: derivedOrder,
+        enabledSectionIds: enabled,
+
+        rescore: null,
+
+        atsScore: originalScore,
+        optimizedAtsScore: optimizedScore,
+
+        // optional
+        keywordsSuggested: result?.improvements?.missing_keywords || [],
+        generatedFileNameHint: "Resume_Optimized.pdf",
+      }));
     } catch (e) {
-      setError(e.message || "Evaluation failed.");
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+      setAnalysisProgress(null);
+      setError(e?.message || "Analyze failed");
     } finally {
-      setIsEvaluating(false);
+      setBusy(false);
     }
-  };
+  }, [file, jd, model, mode, useCache, setEvalState]);
 
-  const onClickGoPdf = () => {
-    if (!evalState?.resumeCanonical) {
-      setError("No optimized resume data found. Please evaluate first.");
-      return;
-    }
-    navigate("/app/pdf");
-  };
+  const originalScore = analysis?.original?.ats?.score ?? null;
+  const optimizedScore = analysis?.optimized?.ats?.score ?? null;
 
   return (
-    <div className="min-h-screen w-full bg-[radial-gradient(1200px_circle_at_10%_10%,rgba(124,255,178,0.18),transparent_40%),radial-gradient(900px_circle_at_90%_20%,rgba(99,102,241,0.25),transparent_45%),linear-gradient(to_bottom_right,#0b1220,#070a12)] text-white">
-      {/* Top bar */}
-      <div className="sticky top-0 z-50 border-b border-white/10 bg-black/20 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white/10 ring-1 ring-white/15 shadow-soft">
-              <span className="text-lg">📈</span>
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-xl font-extrabold tracking-tight">ATS Evaluation</div>
-              <div className="text-sm text-white/70">Upload + compare against a job description.</div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 sm:justify-end">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/10 px-4 py-2 text-xs text-white/75">
-              <span className={`h-2 w-2 rounded-full ${isEvaluating ? "bg-emerald-300" : "bg-white/50"}`} />
-              {isEvaluating ? "Evaluating…" : hasResult ? "Evaluation ready" : "Waiting for inputs"}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        {!hasResult ? (
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_420px]">
-            {/* Inputs */}
-            <div className="rounded-3xl border border-white/12 bg-white/[0.08] p-5 shadow-soft backdrop-blur-xl sm:p-6">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Evaluate your resume</h1>
-                  <p className="mt-2 text-sm text-white/70">
-                    Upload a PDF + provide either a job link or the job description text.
-                  </p>
-                </div>
-                <div className="w-fit rounded-2xl border border-white/12 bg-black/20 px-3 py-2 text-xs text-white/70">
-                  Output: score + 5 fixes
+    <NoirShell>
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        {/* Session banner */}
+        {hasSession && (
+          <div className="mb-5 rounded-3xl border border-white/10 bg-white/5 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-extrabold">You have a previous session</div>
+                <div className="mt-1 text-xs text-white/65">
+                  Resume evaluation data was found in this browser.
                 </div>
               </div>
-
-              {/* JD Mode toggle */}
-              <div className="mt-6">
-                <div className="text-sm font-semibold text-white/90">Job description input</div>
-                <div className="mt-3 inline-flex w-full rounded-2xl border border-white/12 bg-black/20 p-1 sm:w-auto">
-                  <button
-                    className={[
-                      "flex-1 rounded-xl px-4 py-2 text-sm transition sm:flex-none",
-                      jdMode === "link" ? "bg-white/10 text-white" : "text-white/70 hover:text-white",
-                    ].join(" ")}
-                    onClick={() => setJdMode("link")}
-                    type="button"
-                  >
-                    Paste link
-                  </button>
-                  <button
-                    className={[
-                      "flex-1 rounded-xl px-4 py-2 text-sm transition sm:flex-none",
-                      jdMode === "text" ? "bg-white/10 text-white" : "text-white/70 hover:text-white",
-                    ].join(" ")}
-                    onClick={() => setJdMode("text")}
-                    type="button"
-                  >
-                    Paste text
-                  </button>
-                </div>
-              </div>
-
-              {/* JD inputs */}
-              {jdMode === "link" ? (
-                <div className="mt-4">
-                  <label className="text-sm font-semibold text-white/90">Job link</label>
-                  <textarea
-                    placeholder="Paste job link here…"
-                    className="mt-2 h-12 w-full resize-none rounded-2xl border border-white/12 bg-black/25 px-4 py-3 text-sm text-white outline-none placeholder:text-white/50 focus:border-white/25"
-                    value={jobDescLink}
-                    onChange={(e) => setJobDescLink(e.target.value)}
-                  />
-                  <div className="mt-2 text-xs text-white/60">
-                    Some sites block extraction — if that happens, switch to “Paste text”.
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4">
-                  <label className="text-sm font-semibold text-white/90">Job description text</label>
-                  <textarea
-                    placeholder="Paste the full job description text here…"
-                    className="mt-2 h-44 w-full resize-y rounded-2xl border border-white/12 bg-black/25 px-4 py-3 text-sm text-white outline-none placeholder:text-white/50 focus:border-white/25 sm:h-52"
-                    value={jobDescText}
-                    onChange={(e) => setJobDescText(e.target.value)}
-                  />
-                </div>
-              )}
-
-              {/* Resume upload */}
-              <div className="mt-6">
-                <label className="text-sm font-semibold text-white/90">Resume PDF</label>
-                <div className="mt-2 rounded-3xl border border-white/12 bg-black/15 p-3">
-                  <div className="flex justify-center">
-                    {/* Responsive: let DragNDrop fill width on small screens */}
-                    <div className="w-full max-w-[520px]">
-                      <DragNDrop width="100%" height="260px" setDroppedFile={setUploadedFile} />
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-2 text-xs text-white/65">
-                  {uploadedFile ? (
-                    <>
-                      Selected: <span className="font-semibold text-white">{uploadedFile.name}</span>
-                    </>
-                  ) : (
-                    "Drag and drop a PDF, or click to select."
-                  )}
-                </div>
-              </div>
-
-              {/* Evaluate button */}
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-                <CustomButton
-                  text={isEvaluating ? "Evaluating…" : "Evaluate"}
-                  disabled={!canEvaluate}
-                  onClick={onClickEvaluate}
-                  className="w-full sm:w-44"
-                />
-                <div className="text-xs text-white/60">
-                  We’ll show your ATS score + the top 5 changes to improve it.
-                </div>
-              </div>
-
-              {error && (
-                <div className="mt-5 rounded-2xl border border-red-300/40 bg-red-200/90 p-4 text-red-950">
-                  <div className="font-extrabold">Something went wrong</div>
-                  <div className="mt-1 text-sm leading-relaxed">{error}</div>
-                </div>
-              )}
-            </div>
-
-            {/* Side card */}
-            <div className="rounded-3xl border border-white/12 bg-white/[0.06] p-5 shadow-soft backdrop-blur-xl sm:p-6">
-              <div className="text-sm font-extrabold">What you’ll get</div>
-              <div className="mt-4 space-y-3 text-sm text-white/75">
-                <div className="flex items-start gap-3">
-                  <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300" />
-                  Big ATS score that’s easy to compare across jobs
-                </div>
-                <div className="flex items-start gap-3">
-                  <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300" />
-                  5 prioritized fixes (keywords, bullets, formatting, etc.)
-                </div>
-                <div className="flex items-start gap-3">
-                  <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300" />
-                  Keyword suggestions (up to 10) for the optimized PDF step
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          // Results view
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[380px_1fr]">
-            {/* Score */}
-            <div className="rounded-3xl border border-white/12 bg-white/[0.08] p-5 shadow-soft backdrop-blur-xl sm:p-6">
-              <div className="text-sm text-white/70">ATS Score</div>
-              <div className="mt-2 text-5xl font-extrabold tracking-tight sm:text-6xl">
-                {evalState.atsScore ?? "—"}
-              </div>
-              <div className="mt-2 text-sm text-white/70">
-                Higher is better. Improve score by applying the suggested changes + keywords.
-              </div>
-
-              <div className="mt-6 rounded-2xl border border-white/12 bg-black/20 p-4">
-                <div className="text-xs text-white/60">Suggested keywords (top)</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {(evalState.keywordsSuggested || []).slice(0, 10).map((k, i) => (
-                    <span
-                      key={i}
-                      className="rounded-full border border-white/12 bg-white/10 px-3 py-1 text-xs text-white/80"
-                    >
-                      {k}
-                    </span>
-                  ))}
-                  {(!evalState.keywordsSuggested || evalState.keywordsSuggested.length === 0) && (
-                    <span className="text-xs text-white/60">No keyword suggestions returned.</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <CustomButton
-                  text="Generate optimized PDF"
-                  onClick={onClickGoPdf}
-                  disabled={!evalState.resumeCanonical}
-                  className="w-full"
-                />
-                <div className="mt-2 text-xs text-white/60">
-                  Next: choose keyword count (3–10) → generate preview → download.
-                </div>
-              </div>
-
-              {error && (
-                <div className="mt-5 rounded-2xl border border-red-300/40 bg-red-200/90 p-4 text-red-950">
-                  <div className="font-extrabold">Something went wrong</div>
-                  <div className="mt-1 text-sm leading-relaxed">{error}</div>
-                </div>
-              )}
-            </div>
-
-            {/* Changes list */}
-            <div className="rounded-3xl border border-white/12 bg-white/[0.08] p-5 shadow-soft backdrop-blur-xl sm:p-6">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                <div className="min-w-0">
-                  <h2 className="text-xl font-extrabold tracking-tight sm:text-2xl">
-                    Top 5 changes to improve your ATS match
-                  </h2>
-                  <p className="mt-2 text-sm text-white/70">
-                    Keyword alignment is highest priority. Fix these before regenerating your PDF.
-                  </p>
-                </div>
-                <div className="w-fit rounded-2xl border border-white/12 bg-black/20 px-3 py-2 text-xs text-white/70">
-                  {Array.isArray(evalState.changes) ? evalState.changes.length : 0} items
-                </div>
-              </div>
-
-              <div className="mt-5 space-y-3">
-                {(evalState.changes || []).slice(0, 5).map((c, idx) => (
-                  <div key={idx} className="rounded-2xl border border-white/10 bg-black/20 p-4 sm:p-5">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <div className="text-xs text-white/60">{c.type || "Recommendation"}</div>
-                        <div className="mt-1 text-base font-extrabold text-white sm:text-lg">
-                          {c.title || `Change #${idx + 1}`}
-                        </div>
-                      </div>
-                      <PriorityPill priority={c.priority || (idx === 0 ? "High" : "Medium")} />
-                    </div>
-
-                    <div className="mt-3 text-sm text-white/75 leading-relaxed">
-                      {c.detail || c.description || "No details provided."}
-                    </div>
-                  </div>
-                ))}
-
-                {(!evalState.changes || evalState.changes.length === 0) && (
-                  <div className="rounded-2xl border border-dashed border-white/15 bg-black/15 p-5 text-sm text-white/70">
-                    No changes returned by the evaluator. Check your backend `/evaluate` response format.
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <button
                   type="button"
-                  className="w-full rounded-2xl border border-white/12 bg-white/10 px-4 py-2 text-sm text-white/80 hover:bg-white/15 transition sm:w-auto"
-                  onClick={() => {
-                    setEvalState({
-                      jobDescLink: "",
-                      jobDescText: "",
-                      atsScore: null,
-                      optimizedAtsScore: null,
-                      changes: [],
-                      keywordsSuggested: [],
-                      resumeCanonical: null,
-                      generatedFileNameHint: "Resume_Optimized.pdf",
-                      sectionOrder: [],
-                      enabledSectionIds: [],
-                    });
-                  }}
+                  onClick={() => navigate("/app/pdf")}
+                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
                 >
-                  Start over
+                  Go to PDF Studio →
                 </button>
-                <div className="text-xs text-white/60">
-                  Want to test against another job? Start over and re-evaluate.
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetEval(); // keep storage, just reset in-memory (it will overwrite)
+                    // optional: keep inputs too
+                    setJd("");
+                    setFile(null);
+                  }}
+                  className="rounded-2xl border border-white/10 bg-black/30 px-4 py-2 text-sm text-white/85 hover:bg-black/40"
+                >
+                  Start fresh (keep storage)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetEval({ clearStorage: true }); // removes localStorage session
+                    setJd("");
+                    setFile(null);
+                  }}
+                  className="rounded-2xl border border-rose-300/20 bg-rose-300/10 px-4 py-2 text-sm text-rose-100 hover:bg-rose-300/15"
+                >
+                  Clear session
+                </button>
               </div>
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-};
 
-export default EvaluatePage;
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+          <div className="text-2xl font-extrabold tracking-tight">Evaluate your resume</div>
+          <div className="mt-2 text-sm text-white/70">
+            Upload a PDF + paste a job description. We’ll return parsing + ATS scoring + an optimized version.
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* Upload + settings */}
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="text-sm font-extrabold">Resume PDF</div>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm"
+              />
+              {file && (
+                <div className="mt-2 text-xs text-white/60">
+                  Selected: <span className="text-white/85">{file.name}</span>
+                </div>
+              )}
+
+              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs font-semibold text-white/70">Mode</div>
+                  <select
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm"
+                  >
+                    {MODE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-white/70">Model</div>
+                  <select
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm"
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label className="mt-4 flex items-center gap-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={useCache}
+                  onChange={(e) => setUseCache(e.target.checked)}
+                  className="h-4 w-4 accent-cyan-300"
+                />
+                Use cache (saves money while iterating)
+              </label>
+
+              <div className="mt-5">
+                <CustomButton
+                  text={busy ? "Analyzing…" : "Analyze"}
+                  onClick={onAnalyze}
+                  disabled={!canAnalyze}
+                  className="w-full noir-btn"
+                />
+                {analysisProgress != null && (
+                  <div className="mt-3">
+                    <div className="flex justify-between text-xs text-white/60 mb-1">
+                      <span>Progress</span>
+                      <span>{analysisProgress}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-cyan-400/90 transition-[width] duration-300 ease-out"
+                        style={{ width: `${analysisProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="mt-2 text-xs text-white/55">
+                  Tip: start with <span className="font-semibold">gpt-4.1-mini</span> + fast.
+                </div>
+              </div>
+
+              {error && (
+                <div className="mt-4 rounded-2xl border border-rose-300/30 bg-rose-300/10 p-4 text-rose-100">
+                  <div className="font-extrabold">Error</div>
+                  <div className="mt-1 text-sm">{error}</div>
+                </div>
+              )}
+            </div>
+
+            {/* JD */}
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="text-sm font-extrabold">Job description</div>
+              <textarea
+                value={jd}
+                onChange={(e) => setJd(e.target.value)}
+                rows={14}
+                placeholder="Paste the JD here…"
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
+              />
+              <div className="mt-2 text-xs text-white/55">
+                Best results if you paste the full JD (responsibilities + requirements).
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Results */}
+        {analysis && (
+          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
+            <div className="space-y-4">
+              <PillList
+                title="Missing keywords"
+                items={analysis?.improvements?.missing_keywords?.slice(0, 40) || []}
+              />
+              <PillList
+                title="Priority actions"
+                items={analysis?.improvements?.priority_actions || []}
+              />
+              <RewriteList items={analysis?.improvements?.rewrite_suggestions || []} />
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="text-lg font-extrabold">Scores</div>
+              <div className="mt-3 grid grid-cols-1 gap-3">
+                <ScoreCard title="Original ATS" score={originalScore} />
+                <ScoreCard title="Optimized ATS" score={optimizedScore} />
+              </div>
+
+              <div className="mt-5">
+                <div className="text-sm font-extrabold">Next</div>
+                <div className="mt-1 text-sm text-white/70">
+                  Continue to PDF Studio to preview + reorder + download.
+                </div>
+                <div className="mt-4">
+                  <CustomButton
+                    text="Continue →"
+                    onClick={() => navigate("/app/pdf")}
+                    className="w-full noir-btn"
+                  />
+                </div>
+              </div>
+
+              {analysis?.telemetry && (
+                <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-white/65">
+                  <div className="font-semibold text-white/75">Telemetry</div>
+                  <div className="mt-2 space-y-1">
+                    <div>model: {analysis.telemetry.model}</div>
+                    <div>mode: {analysis.telemetry.mode}</div>
+                    <div>latency_ms: {analysis.telemetry.latency_ms}</div>
+                    {analysis.telemetry.estimated_cost_usd != null && (
+                      <div>est_cost: ${Number(analysis.telemetry.estimated_cost_usd).toFixed(4)}</div>
+                    )}
+                    <div>cache_hit: {String(analysis.telemetry.cache_hit)}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </NoirShell>
+  );
+}

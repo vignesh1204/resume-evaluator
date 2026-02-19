@@ -2,22 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-/* App-wide polish */
-:root {
-  color-scheme: dark;
-}
-
-html, body, #root {
+/* Always keep the document dark so scrolling never shows white */
+html,
+body,
+#root {
   height: 100%;
+  background: #07080d; /* fallback */
 }
 
+/* Optional: nicer text rendering */
 body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  color: rgba(255, 255, 255, 0.92);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Smooth scroll + nicer selection */
-* { scroll-behavior: smooth; }
-::selection { background: rgba(124, 255, 178, 0.22); }
+/* Noir Aurora theme tokens */
+:root {
+  --bg0: #07080d;
+  --bg1: #0b0d16;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-2: rgba(255, 255, 255, 0.045);
+  --border: rgba(255, 255, 255, 0.10);
+
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.62);
+
+  --violet: 138, 91, 255; /* #8A5BFF */
+  --teal: 58, 222, 255;   /* #3ADEFF */
+  --lime: 140, 255, 188;  /* #8CFFBC */
+}
+
+.noir-bg {
+  background:
+    radial-gradient(900px circle at 12% 14%, rgba(var(--violet), 0.18), transparent 52%),
+    radial-gradient(1000px circle at 86% 22%, rgba(var(--teal), 0.14), transparent 56%),
+    radial-gradient(900px circle at 58% 92%, rgba(var(--lime), 0.10), transparent 55%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  color: var(--text);
+}
+
+.noir-grain {
+  position: relative;
+}
+.noir-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  border-radius: inherit;
+}
+
+.noir-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 35px rgba(0,0,0,0.35);
+  backdrop-filter: blur(14px);
+}
+.noir-card-2 {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+
+.noir-muted { color: var(--muted); }
+
+.noir-btn {
+  background: linear-gradient(135deg, rgba(var(--violet), 0.95), rgba(var(--teal), 0.75));
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+}
+.noir-btn:hover { filter: brightness(1.05); }
+.noir-btn:disabled { opacity: 0.55; cursor: not-allowed; }
