@@ -16,9 +16,17 @@ from pdf_latex import (
 
 app = Flask(__name__)
 
+raw_origins = os.getenv(
+    "CORS_ORIGIN",
+    "http://localhost:3000,http://127.0.0.1:3000",
+)
+allowed_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
 CORS(
     app,
-    resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
+    resources={r"/*": {"origins": allowed_origins}},
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 DEFAULT_MODE = os.getenv("RESUME_MODE", "quality")
