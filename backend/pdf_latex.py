@@ -45,6 +45,8 @@ _LATEX_ESCAPE_MAP = {
     "^": r"\textasciicircum{}",
 }
 
+_BOLD_TOKEN_RE = re.compile(r"(\\textbf\{[^{}]+\}|\*\*[^*]+\*\*|__[^_]+__)")
+
 
 def _normalize_unicode_for_latex(s: str) -> str:
     """Replace Unicode that pdflatex can't handle (e.g. ⋄ U+22C4) with ASCII equivalents."""
@@ -54,13 +56,41 @@ def _normalize_unicode_for_latex(s: str) -> str:
     return out
 
 
-def latex_escape(s: str) -> str:
+def _latex_escape_plain(s: str) -> str:
     if not isinstance(s, str):
         return ""
     out = _normalize_unicode_for_latex(s)
     for k, v in _LATEX_ESCAPE_MAP.items():
         out = out.replace(k, v)
     return out
+
+
+def latex_escape(s: str) -> str:
+    """
+    Escape LaTeX-special characters while preserving bold emphasis markers:
+    - \\textbf{...}
+    - **...**
+    - __...__
+    """
+    if not isinstance(s, str):
+        return ""
+    parts = _BOLD_TOKEN_RE.split(s)
+    out_parts: List[str] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith(r"\textbf{") and part.endswith("}"):
+            inner = part[8:-1].strip()
+            if inner:
+                out_parts.append(r"{\bf " + _latex_escape_plain(inner) + r"}")
+            continue
+        if (part.startswith("**") and part.endswith("**")) or (part.startswith("__") and part.endswith("__")):
+            inner = part[2:-2].strip()
+            if inner:
+                out_parts.append(r"{\bf " + _latex_escape_plain(inner) + r"}")
+            continue
+        out_parts.append(_latex_escape_plain(part))
+    return "".join(out_parts)
 
 
 class _KeywordBoldener:
@@ -299,8 +329,8 @@ def _header_line(left: str, right: str, bold_left: bool, education_mode: bool) -
     else:
         left_tex = left if education_mode else (r"{\em " + left + r"}")
     if right:
-        return r"{\small " + left_tex + r" \hfill " + right + r"}"
-    return r"{\small " + left_tex + r"}"
+        return r"{\small " + left_tex + r" \hfill " + right + r"} \\"
+    return r"{\small " + left_tex + r"} \\"
 
 
 def _subsection_header_rows(
@@ -317,16 +347,51 @@ def _subsection_header_rows(
     All header rows use slightly smaller font.
     """
     out: List[str] = []
+
+    if education_mode:
+        edu_lines: List[str] = []
+        edu_meta: List[str] = []
+        has_bullets = False
+        for blk in sub_blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            t = blk.get("type")
+            if t == "line":
+                txt = latex_escape(str(blk.get("text", "")).strip())
+                if txt:
+                    edu_lines.append(txt)
+            elif t == "meta":
+                txt = latex_escape(str(blk.get("text", "")).strip())
+                if txt:
+                    edu_meta.append(txt)
+            elif t == "bullets":
+                has_bullets = True
+
+        if not has_bullets:
+            degree = subsection_title if subsection_title else (edu_lines[0] if len(edu_lines) > 0 else "")
+            college = edu_lines[0] if subsection_title else (edu_lines[1] if len(edu_lines) > 1 else "")
+            date_range = edu_meta[0] if len(edu_meta) > 0 else ""
+            location = edu_meta[1] if len(edu_meta) > 1 else ""
+
+            row1 = " - ".join([x for x in [degree, date_range] if x])
+            row2 = " - ".join([x for x in [college, location] if x])
+            if row1:
+                out.append(r"{\small {\bf " + row1 + r"}}")
+            if row2:
+                out.append(r"{\small " + row2 + r"}")
+            return out
+
     current_left: Optional[str] = subsection_title if subsection_title else None
     left_is_title = bool(subsection_title)
     seen_bullets = False
 
-    def _flush_left(bold: bool) -> str:
+    def _flush_left(bold: bool, with_break: bool = True) -> str:
         if bold:
             left_tex = r"{\bf " + current_left + r"}"
         else:
             left_tex = current_left if education_mode else (r"{\em " + current_left + r"}")
-        return r"{\small " + left_tex + r"}"
+        row = r"{\small " + left_tex + r"}"
+        return row + (r" \\" if with_break else "")
 
     for blk in sub_blocks or []:
         if not isinstance(blk, dict):
@@ -339,7 +404,7 @@ def _subsection_header_rows(
                 current_left = None
                 left_is_title = False
             elif meta_txt:
-                out.append(r"{\small " + meta_txt + r"}")
+                out.append(r"{\small " + meta_txt + r"} \\")
         elif t == "line":
             line_txt = latex_escape(str(blk.get("text", "")).strip())
             if not line_txt:
@@ -351,8 +416,10 @@ def _subsection_header_rows(
         elif t == "bullets":
             seen_bullets = True
             if current_left is not None:
-                out.append(_flush_left(left_is_title))
+                # Avoid extra blank gap before list: no forced linebreak here.
+                out.append(_flush_left(left_is_title, with_break=False))
                 current_left = None
+            out.append(r"\vspace{-3pt}")
             out.append(r"\begin{tightitemize}")
             for it in (blk.get("items") or []):
                 if isinstance(it, str) and it.strip():
@@ -362,10 +429,134 @@ def _subsection_header_rows(
                         item_txt = latex_escape(it.strip())
                     out.append(r"\item " + item_txt)
             out.append(r"\end{tightitemize}")
+            out.append(r"\vspace{-3pt}")
 
     if current_left is not None and not seen_bullets:
         out.append(_flush_left(left_is_title))
 
+    return out
+
+
+def _education_rows_from_line(raw_line: str) -> List[str]:
+    """
+    Fallback formatter for education entries that arrive as a single line.
+    Target shape:
+      1) Degree - Date Range
+      2) College Name - Location
+    """
+    text = str(raw_line or "").strip()
+    if not text:
+        return []
+
+    # Split by commas first: usually [degree+date, college, location...]
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        return []
+
+    first = parts[0]
+    college = parts[1] if len(parts) > 1 else ""
+    location = ", ".join(parts[2:]) if len(parts) > 2 else ""
+
+    # Find a month-year date range inside first part, then split degree/date.
+    date_pat = re.compile(
+        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s+\d{4}\s*-\s*"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s+\d{4})",
+        re.IGNORECASE,
+    )
+    m = date_pat.search(first)
+    if m:
+        date_range_raw = m.group(1).strip()
+        degree_raw = (first[: m.start()] + first[m.end() :]).strip(" ,-")
+    else:
+        degree_raw = first
+        date_range_raw = ""
+
+    left1 = latex_escape(degree_raw)
+    right1 = latex_escape(date_range_raw)
+    left2 = latex_escape(college)
+    right2 = latex_escape(location)
+
+    out: List[str] = []
+    if left1 or right1:
+        if left1 and right1:
+            out.append(r"{\small {\bf " + left1 + r"} \hfill " + right1 + r"} \\")
+        elif left1:
+            out.append(r"{\small {\bf " + left1 + r"}} \\")
+        else:
+            out.append(r"{\small " + right1 + r"} \\")
+    if left2 or right2:
+        if left2 and right2:
+            out.append(r"{\small " + left2 + r" \hfill " + right2 + r"} \\")
+        else:
+            out.append(r"{\small " + (left2 or right2) + r"} \\")
+    return out
+
+
+def _education_rows_from_subsection(subsection_title: str, sub_blocks: List[Any]) -> List[str]:
+    """
+    Deterministic Education subsection renderer:
+      1) Degree - Date Range
+      2) College Name - Location
+    """
+    lines: List[str] = []
+    metas: List[str] = []
+    for blk in sub_blocks or []:
+        if not isinstance(blk, dict):
+            continue
+        t = blk.get("type")
+        if t == "line":
+            txt = str(blk.get("text", "")).strip()
+            if txt:
+                lines.append(txt)
+        elif t == "meta":
+            txt = str(blk.get("text", "")).strip()
+            if txt:
+                metas.append(txt)
+
+    # If the first line is a merged "degree+date, college, location" row, parse it directly.
+    if lines and "," in lines[0]:
+        parsed = _education_rows_from_line(lines[0])
+        if parsed:
+            return parsed
+
+    degree_raw = subsection_title.strip() if subsection_title else ""
+    date_raw = metas[0] if len(metas) > 0 else ""
+    college_raw = lines[0] if len(lines) > 0 else ""
+    location_raw = metas[1] if len(metas) > 1 else ""
+
+    # Fallback: when degree/date are merged in first line without subsection title.
+    if not degree_raw and lines:
+        merged = _education_rows_from_line(lines[0])
+        if merged:
+            if len(lines) > 1:
+                row1 = merged[0]
+                row2_college = latex_escape(lines[1])
+                row2_location = location_raw
+                row2_location_esc = latex_escape(row2_location)
+                if row2_college and row2_location_esc:
+                    row2 = r"{\small " + row2_college + r" \hfill " + row2_location_esc + r"} \\"
+                else:
+                    row2 = r"{\small " + (row2_college or row2_location_esc) + r"} \\"
+                return [row1 + r" \\", row2] if (row2_college or row2_location_esc) else merged
+            return merged
+
+    left1 = latex_escape(degree_raw)
+    right1 = latex_escape(date_raw)
+    left2 = latex_escape(college_raw)
+    right2 = latex_escape(location_raw)
+    out: List[str] = []
+    if left1 or right1:
+        if left1 and right1:
+            out.append(r"{\small {\bf " + left1 + r"} \hfill " + right1 + r"} \\")
+        elif left1:
+            out.append(r"{\small {\bf " + left1 + r"}} \\")
+        else:
+            out.append(r"{\small " + right1 + r"} \\")
+    if left2 or right2:
+        if left2 and right2:
+            out.append(r"{\small " + left2 + r" \hfill " + right2 + r"} \\")
+        else:
+            out.append(r"{\small " + (left2 or right2) + r"} \\")
     return out
 
 
@@ -378,6 +569,7 @@ def _blocks_to_latex(
     out: List[str] = []
     section_lower = section_title.lower()
     section_is_skills = any(hint in section_lower for hint in _SKILLS_SECTION_HINTS)
+    section_is_education = "education" in section_lower
     enable_bullet_bold = not section_is_skills
     for b in blocks or []:
         if not isinstance(b, dict):
@@ -385,7 +577,13 @@ def _blocks_to_latex(
         t = b.get("type")
 
         if t == "line":
-            txt = latex_escape(str(b.get("text", "")).strip())
+            raw_txt = str(b.get("text", "")).strip()
+            if section_is_education:
+                edu_rows = _education_rows_from_line(raw_txt)
+                if edu_rows:
+                    out.extend(edu_rows)
+                    continue
+            txt = latex_escape(raw_txt)
             if txt:
                 out.append(txt + r" \\")
         elif t == "meta":
@@ -403,13 +601,20 @@ def _blocks_to_latex(
                 else:
                     items.append(latex_escape(str(x).strip()))
             if items:
+                out.append(r"\vspace{-3pt}")
                 out.append(r"\begin{tightitemize}")
                 for it in items:
                     out.append(r"\item " + it)
                 out.append(r"\end{tightitemize}")
+                out.append(r"\vspace{-3pt}")
         elif t == "subsection":
             title = latex_escape(str(b.get("title", "")).strip())
             sub_blocks = b.get("blocks", []) or []
+            if section_is_education:
+                edu_rows = _education_rows_from_subsection(str(b.get("title", "")).strip(), sub_blocks)
+                if edu_rows:
+                    out.extend(edu_rows)
+                    continue
             if title and _subsection_is_inline_only(sub_blocks):
                 content = _subsection_inline_content(sub_blocks)
                 if content:
@@ -430,7 +635,12 @@ def _blocks_to_latex(
     return out
 
 
-def skeleton_to_latex_body(resume: Dict[str, Any], *, boldener: Optional[_KeywordBoldener] = None) -> str:
+def skeleton_to_latex_body(
+    resume: Dict[str, Any],
+    *,
+    boldener: Optional[_KeywordBoldener] = None,
+    stretch_sections: bool = False,
+) -> str:
     """
     Builds LaTeX body from the resume skeleton. Structure is preserved: section
     and subsection titles, inline vs bullets, and block layout come from the
@@ -444,12 +654,16 @@ def skeleton_to_latex_body(resume: Dict[str, Any], *, boldener: Optional[_Keywor
     if not isinstance(sections, list):
         sections = []
 
+    rendered = 0
     for sec in sections:
         if not isinstance(sec, dict):
             continue
         title = latex_escape(str(sec.get("title", "")).strip())
         if not title:
             continue
+
+        if stretch_sections and rendered > 0:
+            lines.append(r"\vspace{0pt plus 1fill}")
 
         lines.append(r"\begin{rSection}{" + title + r"}")
 
@@ -458,6 +672,7 @@ def skeleton_to_latex_body(resume: Dict[str, Any], *, boldener: Optional[_Keywor
             lines.extend(_blocks_to_latex(blocks, section_title=title, boldener=boldener))
 
         lines.append(r"\end{rSection}")
+        rendered += 1
 
     return "\n".join(lines).strip() + "\n"
 
@@ -469,6 +684,91 @@ def skeleton_to_latex_body(resume: Dict[str, Any], *, boldener: Optional[_Keywor
 TOKEN_NAME = "%%__NAME__%%"
 TOKEN_CONTACT = "%%__CONTACT__%%"
 TOKEN_BODY = "%%__BODY__%%"
+TOKEN_ITEMSEP = "%%__ITEMSEP__%%"
+TOKEN_TOPSEP = "%%__TOPSEP__%%"
+TOKEN_SECTION_SKIP = "%%__SECTION_SKIP__%%"
+TOKEN_SECTION_LINE_SKIP = "%%__SECTION_LINE_SKIP__%%"
+TOKEN_ADDRESS_SKIP = "%%__ADDRESS_SKIP__%%"
+TOKEN_AFTER_RULE_SKIP = "%%__AFTER_RULE_SKIP__%%"
+TOKEN_TOP_PULL = "%%__TOP_PULL__%%"
+
+
+def _resume_density_score(resume: Dict[str, Any]) -> int:
+    """Estimate content density to choose stretch/compact spacing profile."""
+    score = 0
+    sections = resume.get("sections", []) if isinstance(resume, dict) else []
+    if not isinstance(sections, list):
+        return score
+
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        score += 3
+        blocks = sec.get("blocks", []) or []
+        if not isinstance(blocks, list):
+            continue
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            t = b.get("type")
+            if t in ("line", "meta"):
+                score += 1
+            elif t == "bullets":
+                items = b.get("items", []) or []
+                if isinstance(items, list):
+                    score += len([x for x in items if isinstance(x, str) and x.strip()]) * 2
+            elif t == "subsection":
+                score += 2
+                sub = b.get("blocks", []) or []
+                if not isinstance(sub, list):
+                    continue
+                for sb in sub:
+                    if not isinstance(sb, dict):
+                        continue
+                    st = sb.get("type")
+                    if st in ("line", "meta"):
+                        score += 1
+                    elif st == "bullets":
+                        items = sb.get("items", []) or []
+                        if isinstance(items, list):
+                            score += len([x for x in items if isinstance(x, str) and x.strip()]) * 2
+    return score
+
+
+def _layout_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
+    density = _resume_density_score(resume)
+    if density <= 28:
+        return {
+            "itemsep": "0pt plus 0.6pt minus 0.2pt",
+            "topsep": "1pt plus 0.8pt minus 0.2pt",
+            "section_skip": "1pt plus 2pt minus 0.5pt",
+            "section_line_skip": "4pt plus 1pt minus 0.5pt",
+            "address_skip": "1pt",
+            "after_rule_skip": "1pt plus 0.8pt minus 0.2pt",
+            "top_pull": "-2mm",
+            "stretch_sections": True,
+        }
+    if density >= 62:
+        return {
+            "itemsep": "-2pt plus 0.2pt minus 0.6pt",
+            "topsep": "0pt",
+            "section_skip": "0pt",
+            "section_line_skip": "3pt",
+            "address_skip": "0pt",
+            "after_rule_skip": "0.5pt",
+            "top_pull": "-3mm",
+            "stretch_sections": False,
+        }
+    return {
+        "itemsep": "-1pt plus 0.3pt minus 0.4pt",
+        "topsep": "0.5pt plus 0.3pt minus 0.2pt",
+        "section_skip": "0.5pt plus 0.8pt minus 0.3pt",
+        "section_line_skip": "4pt",
+        "address_skip": "1pt",
+        "after_rule_skip": "1pt",
+        "top_pull": "-3mm",
+        "stretch_sections": False,
+    }
 
 def _clean_header_text(s: str) -> str:
     """Clean a header line: strip braces, normalize separators, remove noise."""
@@ -533,14 +833,26 @@ def render_main_tex_from_template(
     with open(TEMPLATE_TEX_PATH, "r", encoding="utf-8") as f:
         template_tex = f.read()
 
+    profile = _layout_profile(resume)
     boldener = _KeywordBoldener(highlight_keywords, max_keywords=10)
-    body = skeleton_to_latex_body(resume, boldener=boldener)
+    body = skeleton_to_latex_body(
+        resume,
+        boldener=boldener,
+        stretch_sections=bool(profile.get("stretch_sections", False)),
+    )
     name, contact = _derive_name_and_contact(resume)
 
     # Replace tokens exactly as provided
     out = template_tex.replace(TOKEN_NAME, name)
     out = out.replace(TOKEN_CONTACT, contact)
     out = out.replace(TOKEN_BODY, body)
+    out = out.replace(TOKEN_ITEMSEP, str(profile["itemsep"]))
+    out = out.replace(TOKEN_TOPSEP, str(profile["topsep"]))
+    out = out.replace(TOKEN_SECTION_SKIP, str(profile["section_skip"]))
+    out = out.replace(TOKEN_SECTION_LINE_SKIP, str(profile["section_line_skip"]))
+    out = out.replace(TOKEN_ADDRESS_SKIP, str(profile["address_skip"]))
+    out = out.replace(TOKEN_AFTER_RULE_SKIP, str(profile["after_rule_skip"]))
+    out = out.replace(TOKEN_TOP_PULL, str(profile["top_pull"]))
 
     # Guard: make sure body token existed
     if TOKEN_BODY in template_tex and TOKEN_BODY in out:

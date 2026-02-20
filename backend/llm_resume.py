@@ -133,6 +133,7 @@ Single-page constraint:
 - The optimized resume MUST fit on 1 page. Do NOT add new bullets, sections, or content that would make the resume longer than the original.
 - Optimization means REPLACING and REPHRASING existing bullets to be more impactful — not adding new ones. The optimized resume should have the same number of bullets and sections as the original.
 - Only add content (~20% of the time) if it is a minor clarification that does not increase length (e.g. adding a keyword into an existing bullet).
+- Preserve existing emphasis: if the original resume text has bold/emphasis markers for words or phrases, keep those same parts emphasized in optimized.resume (do not convert emphasized text to plain text).
 
 Optimization:
 - Return OPTIMIZED resume skeleton with improvements applied (rephrasing only; same length or shorter). Score OPTIMIZED vs JD.

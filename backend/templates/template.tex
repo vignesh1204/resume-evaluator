@@ -9,17 +9,17 @@
 \setlist[tightitemize]{
   label=$\cdot$,
   leftmargin=0em,
-  itemsep=-1pt,
-  topsep=1pt,
+  itemsep=%%__ITEMSEP__%%,
+  topsep=%%__TOPSEP__%%,
   parsep=0pt,
   partopsep=0pt
 }
 
 % Override resume.cls spacing
-\def\sectionskip{\vspace{1pt}}
-\def\sectionlineskip{\vspace{5pt}}
+\def\sectionskip{\vspace{%%__SECTION_SKIP__%%}}
+\def\sectionlineskip{\vspace{%%__SECTION_LINE_SKIP__%%}}
 \def\nameskip{\smallskip}
-\def\addressskip{\vspace{1pt}}
+\def\addressskip{\vspace{%%__ADDRESS_SKIP__%%}}
 \setlength{\parskip}{0pt}
 
 % Replace rSection: no list env, just a group — zero extra vertical space
@@ -28,7 +28,7 @@
   \MakeUppercase{{\bf #1}}%
   \sectionlineskip
   \hrule
-  \vspace{2pt}%
+  \vspace{%%__AFTER_RULE_SKIP__%%}%
   \noindent\ignorespaces
 }{%
   \par
@@ -38,7 +38,8 @@
 \address{%%__CONTACT__%%}
 
 \begin{document}
-\vspace*{-3mm}
+\flushbottom
+\vspace*{%%__TOP_PULL__%%}
 
 %%__BODY__%%
 
