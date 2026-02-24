@@ -31,6 +31,8 @@ MODEL_PRICING_USD_PER_1M: Dict[str, Dict[str, float]] = {
 # ----------------------------
 
 SYSTEM_PROMPT_BASE = """You are an expert resume parser + ATS evaluator.
+You are writing output that the user may submit directly to real job applications.
+Prioritize correctness, precision, and trust over creativity.
 
 You will receive:
 - Full extracted resume text (messy, from PDF)
@@ -121,9 +123,24 @@ Rules:
 - Bullets must be grouped as one block: {type:"bullets", items:[...]}.
 - Rewrite suggestions: at least 5 when applicable, each grounded in actual resume content.
 
+High-trust content policy:
+- Prefer fewer, higher-confidence outputs over many weak ones.
+- Never output generic filler advice like "improve communication", "be a team player", "work in a fast-paced environment", or "hard-working".
+- For missing_keywords, include only concrete role-relevant terms from the JD:
+  tools/technologies, methods/frameworks, domains, certifications, role-specific responsibilities.
+- Exclude generic terms (e.g. responsible, collaborate, optimize, motivated, problem-solving, detail-oriented, communication).
+- Favor 1-3 word keyword phrases used explicitly or very clearly implied by the JD.
+- De-duplicate aggressively (case-insensitive, singular/plural variants, close synonyms).
+- For each rewrite_suggestion:
+  - "before" must be copied from original resume wording.
+  - "after" must preserve truth and meaning while increasing clarity, ATS alignment, and specificity.
+  - Keep length same or shorter than before unless one brief keyword insertion significantly improves relevance.
+  - "reason" must explain exactly which JD requirement this rewrite targets.
+
 ATS scoring rubric:
 - Compute a breakdown with scores that sum to the final score (0–100).
 - Keep breakdown consistent between original and optimized.
+- Score conservatively; do not inflate if evidence is weak.
 
 Header rules:
 - header.lines[0] MUST be the person's full name. Never put phone, email, or URLs as the first line.
@@ -138,6 +155,10 @@ Single-page constraint:
 Optimization:
 - Return OPTIMIZED resume skeleton with improvements applied (rephrasing only; same length or shorter). Score OPTIMIZED vs JD.
 - The PDF is rendered with a consistent visual style (font, spacing, rules); the skeleton you return determines sections, titles, and structure for any industry or role.
+- Final quality gate before returning JSON:
+  1) If any suggestion/keyword is not clearly supported by resume+JD evidence, remove it.
+  2) If a rewrite sounds generic, replace it with a specific one or drop it.
+  3) Ensure optimized resume reads like final application-ready copy, not draft notes.
 """
 
 SYSTEM_PROMPT_SCORE_ONLY = """You are a strict ATS-style evaluator.
@@ -168,22 +189,27 @@ Return ONLY valid JSON (no markdown) in EXACTLY this shape:
 Rules:
 - Do not invent experience. Scores must be internally consistent: sum(breakdown.score) == ats.score.
 - missing_keywords: JD keywords that are missing from the resume (for user consideration only). Do not list keywords that would require inventing experience.
+- Return only high-signal missing keywords: concrete technologies, frameworks, methods, domain terms, certifications, and role responsibilities.
+- Exclude generic soft-skill words and generic corporate verbs.
+- De-duplicate and keep only the most decision-relevant terms.
+- Score conservatively and align notes with explicit resume evidence.
 """
 
 def _mode_instructions(mode: Mode) -> str:
     if mode == "fast":
         return """MODE=FAST
-- Keep output compact.
-- missing_keywords: max 30
-- rewrite_suggestions: max 12
+- Keep output compact and high-signal.
+- missing_keywords: max 20
+- rewrite_suggestions: max 10
 - priority_actions: max 5
 - Keep bullets concise.
 """
     return """MODE=QUALITY
-- Be thorough but keep JSON clean.
-- missing_keywords: max 120
-- rewrite_suggestions: max 40
-- priority_actions: max 12
+- Be thorough, precise, and evidence-based.
+- missing_keywords: max 45
+- rewrite_suggestions: max 15
+- priority_actions: max 6
+- Prefer quality over quantity. Do not add weak or generic suggestions to hit limits.
 """
 
 # ----------------------------

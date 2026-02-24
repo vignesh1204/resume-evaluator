@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import copy
 import os
 import re
 import shutil
@@ -824,6 +825,7 @@ def render_main_tex_from_template(
     resume: Dict[str, Any],
     *,
     highlight_keywords: Optional[List[str]] = None,
+    layout_override: Optional[Dict[str, Any]] = None,
 ) -> str:
     if not os.path.exists(TEMPLATE_TEX_PATH):
         raise FileNotFoundError(f"Missing template.tex at: {TEMPLATE_TEX_PATH}")
@@ -833,7 +835,7 @@ def render_main_tex_from_template(
     with open(TEMPLATE_TEX_PATH, "r", encoding="utf-8") as f:
         template_tex = f.read()
 
-    profile = _layout_profile(resume)
+    profile = layout_override or _layout_profile(resume)
     boldener = _KeywordBoldener(highlight_keywords, max_keywords=10)
     body = skeleton_to_latex_body(
         resume,
@@ -866,13 +868,8 @@ def render_main_tex_from_template(
 # Compile LaTeX -> PDF bytes
 # -----------------------------
 
-def compile_pdf_from_skeleton(
-    resume: Dict[str, Any],
-    *,
-    highlight_keywords: Optional[List[str]] = None,
-) -> bytes:
-    main_tex = render_main_tex_from_template(resume, highlight_keywords=highlight_keywords)
 
+def _compile_latex_tex_to_pdf_bytes(main_tex: str) -> bytes:
     with tempfile.TemporaryDirectory() as tmpdir:
         # Copy resume.cls because template references \documentclass{resume}
         shutil.copy2(RESUME_CLS_PATH, os.path.join(tmpdir, "resume.cls"))
@@ -904,3 +901,177 @@ def compile_pdf_from_skeleton(
 
         with open(pdf_path, "rb") as f:
             return f.read()
+
+
+def _count_pdf_pages(pdf_bytes: bytes) -> int:
+    """Count PDF pages using PyMuPDF if available. Returns 1 when unavailable."""
+    try:
+        import fitz  # type: ignore
+
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            return int(doc.page_count)
+    except Exception:
+        # Safe fallback: if we cannot inspect pages, do not block generation.
+        return 1
+
+
+def _ultra_compact_layout_profile() -> Dict[str, Any]:
+    return {
+        "itemsep": "-3pt",
+        "topsep": "0pt",
+        "section_skip": "0pt",
+        "section_line_skip": "2pt",
+        "address_skip": "0pt",
+        "after_rule_skip": "0pt",
+        "top_pull": "-4mm",
+        "stretch_sections": False,
+    }
+
+
+def _truncate_text_preserving_words(text: str, max_chars: int) -> str:
+    value = str(text or "").strip()
+    if len(value) <= max_chars:
+        return value
+    cutoff = value.rfind(" ", 0, max_chars - 3)
+    if cutoff < max_chars // 2:
+        cutoff = max_chars - 3
+    return value[:cutoff].rstrip(" ,;:") + "..."
+
+
+def _tighten_resume_content(
+    resume: Dict[str, Any],
+    *,
+    max_bullets_per_group: int,
+    max_bullet_chars: int,
+    max_line_chars: int,
+    drop_optional_sections: bool = False,
+) -> Dict[str, Any]:
+    compact = copy.deepcopy(resume)
+
+    optional_section_hints = (
+        "interests",
+        "hobbies",
+        "activities",
+        "references",
+        "certification",
+        "awards",
+    )
+
+    sections = compact.get("sections", [])
+    if isinstance(sections, list) and drop_optional_sections and len(sections) > 4:
+        kept_sections = []
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            title = str(sec.get("title", "")).strip().lower()
+            if any(h in title for h in optional_section_hints):
+                continue
+            kept_sections.append(sec)
+        if kept_sections:
+            compact["sections"] = kept_sections
+
+    def _tighten_blocks(blocks: Any) -> None:
+        if not isinstance(blocks, list):
+            return
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+
+            # Section dicts don't have a "type"; recurse into their blocks.
+            if btype is None and isinstance(block.get("blocks"), list):
+                _tighten_blocks(block.get("blocks", []))
+                continue
+
+            if btype in ("line", "meta"):
+                txt = block.get("text")
+                if isinstance(txt, str) and txt.strip():
+                    block["text"] = _truncate_text_preserving_words(txt, max_line_chars)
+
+            elif btype == "bullets":
+                items = block.get("items", [])
+                if isinstance(items, list):
+                    tightened_items = []
+                    for item in items:
+                        if isinstance(item, str) and item.strip():
+                            tightened_items.append(
+                                _truncate_text_preserving_words(item, max_bullet_chars)
+                            )
+                    block["items"] = tightened_items[:max_bullets_per_group]
+
+            elif btype == "subsection":
+                _tighten_blocks(block.get("blocks", []))
+
+    _tighten_blocks(compact.get("sections", []))
+    return compact
+
+def compile_pdf_from_skeleton(
+    resume: Dict[str, Any],
+    *,
+    highlight_keywords: Optional[List[str]] = None,
+) -> bytes:
+    candidates = [
+        {"resume": resume, "layout": None},
+        {"resume": resume, "layout": _ultra_compact_layout_profile()},
+        {
+            "resume": _tighten_resume_content(
+                resume,
+                max_bullets_per_group=4,
+                max_bullet_chars=170,
+                max_line_chars=160,
+                drop_optional_sections=False,
+            ),
+            "layout": _ultra_compact_layout_profile(),
+        },
+        {
+            "resume": _tighten_resume_content(
+                resume,
+                max_bullets_per_group=3,
+                max_bullet_chars=140,
+                max_line_chars=130,
+                drop_optional_sections=False,
+            ),
+            "layout": _ultra_compact_layout_profile(),
+        },
+        {
+            "resume": _tighten_resume_content(
+                resume,
+                max_bullets_per_group=2,
+                max_bullet_chars=115,
+                max_line_chars=110,
+                drop_optional_sections=True,
+            ),
+            "layout": _ultra_compact_layout_profile(),
+        },
+    ]
+
+    best_pdf: Optional[bytes] = None
+    best_pages: Optional[int] = None
+    last_error: Optional[Exception] = None
+
+    for c in candidates:
+        try:
+            main_tex = render_main_tex_from_template(
+                c["resume"],
+                highlight_keywords=highlight_keywords,
+                layout_override=c["layout"],
+            )
+            pdf_bytes = _compile_latex_tex_to_pdf_bytes(main_tex)
+            page_count = _count_pdf_pages(pdf_bytes)
+
+            if best_pages is None or page_count < best_pages:
+                best_pages = page_count
+                best_pdf = pdf_bytes
+
+            if page_count <= 1:
+                return pdf_bytes
+        except Exception as e:
+            last_error = e
+            continue
+
+    if best_pdf is not None:
+        return best_pdf
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("PDF generation failed: no successful candidate render")
