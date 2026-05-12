@@ -30,7 +30,7 @@ const HeroSection = () => {
             className="w-56 noir-btn"
           />
           <div className="text-xs noir-muted">
-            No signup • Upload PDF • Rescore after edits
+            Upload PDF • Rescore after edits • Sign in to save sessions
           </div>
         </div>
 

@@ -17,13 +17,13 @@ load_dotenv()
 
 Mode = Literal["fast", "quality"]
 
-DEFAULT_MODEL = os.getenv("RESUME_MODEL", "gpt-5.2")
+DEFAULT_MODEL = os.getenv("RESUME_MODEL", "gpt-5.5")
 
-# Rough placeholder pricing (USD / 1M tokens). Update later with real numbers.
+# Pricing (USD / 1M tokens) — updated May 2026.
 MODEL_PRICING_USD_PER_1M: Dict[str, Dict[str, float]] = {
-    "gpt-4.1-mini": {"input": 0.5, "output": 1.5},
-    "gpt-4.1": {"input": 5.0, "output": 15.0},
-    "gpt-5.2": {"input": 10.0, "output": 30.0},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.4": {"input": 2.50, "output": 15.0},
+    "gpt-5.5": {"input": 5.0, "output": 30.0},
 }
 
 # ----------------------------

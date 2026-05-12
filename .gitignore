@@ -1,6 +1,13 @@
-# ===== Secrets =====
+# ===== Secrets & Claude =====
 .env
 **/.env
+.env.local
+**/.env.local
+.env.*.local
+
+# Claude Code config (may contain API keys / settings)
+.claude/
+CLAUDE.md
 
 # ===== Python =====
 **/__pycache__/
@@ -24,6 +31,10 @@ venv/
 
 resumes/
 jds/
+
+# ===== LLM cache (backend) =====
+backend/.cache_resume/
+backend/.cache_score/
 
 # ===== OS / Editor =====
 .DS_Store

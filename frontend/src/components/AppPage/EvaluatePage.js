@@ -20,8 +20,9 @@ const MODE_OPTIONS = [
 ];
 
 const MODEL_OPTIONS = [
-  { value: "gpt-5.1", label: "gpt-5.1 (cheap)" },
-  { value: "gpt-5.2", label: "gpt-5.2 (quality)" },
+  { value: "gpt-5.4-mini", label: "gpt-5.4-mini (fast, cheap)" },
+  { value: "gpt-5.4", label: "gpt-5.4 (balanced)" },
+  { value: "gpt-5.5", label: "gpt-5.5 (best quality)" },
 ];
 
 function ScoreCard({ title, score }) {
@@ -95,7 +96,7 @@ export default function EvaluatePage() {
   const [file, setFile] = useState(null);
   const [jd, setJd] = useState(evalState.jobDescription || "");
   const [mode, setMode] = useState(evalState.mode || "fast");
-  const [model, setModel] = useState(evalState.model || "gpt-5.1");
+  const [model, setModel] = useState(evalState.model || "gpt-5.5");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -320,7 +321,7 @@ export default function EvaluatePage() {
                   </div>
                 )}
                 <div className="mt-2 text-xs text-white/55">
-                  Tip: start with <span className="font-semibold">gpt-5.1</span> + fast.
+                  Tip: start with <span className="font-semibold">gpt-5.4-mini</span> + fast.
                 </div>
               </div>
 

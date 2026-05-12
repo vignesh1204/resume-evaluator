@@ -30,7 +30,7 @@ CORS(
 )
 
 DEFAULT_MODE = os.getenv("RESUME_MODE", "quality")
-DEFAULT_MODEL = os.getenv("RESUME_MODEL", "gpt-5.2")
+DEFAULT_MODEL = os.getenv("RESUME_MODEL", "gpt-5.5")
 
 
 @app.get("/health")
