@@ -1,7 +1,10 @@
 # Don’t copy local env/venv/cache
+.env
 venv/
 .venv/
 __pycache__/
+.cache_resume/
+.cache_score/
 *.pyc
 *.pyo
 *.pyd

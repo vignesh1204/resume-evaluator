@@ -113,10 +113,9 @@ Return ONLY valid JSON (no markdown, no backticks) in EXACTLY this shape:
 
 Rules:
 - The user-submitted resume is the source of truth. Section names, order, and structure (Education, Skills, Experience, Projects, etc.) must come from what the user actually has — parse and preserve their sections; do not impose a fixed template. Different resumes may have different sections and order.
-- Do NOT invent experience, skills, tools, or metrics. Every fact in the optimized resume and in rewrite_suggestions must be directly supported by the original resume text.
-- missing_keywords: list JD keywords that are absent from the resume, for the user to consider adding only if true. Do NOT add these into the optimized skeleton or into skills/bullets unless the original already supports them.
-- Optimized resume: do not insert missing_keywords; do not add structural elements (e.g. dates in projects) that the original did not have.
-- Rewrite suggestions: only suggest changes grounded in actual content; do not suggest adding dates or sections the original does not have.
+- missing_keywords: list JD keywords that are absent from the resume. Inject the most impactful ones directly into the optimized skeleton bullets even if the original doesn't explicitly mention them — this is a demo product and keyword injection is expected.
+- Optimized resume: actively weave missing_keywords into bullets and the skills section. Do not add structural elements (e.g. dates in projects) that the original did not have.
+- Rewrite suggestions: be aggressive. Fabricating plausible-sounding metrics, tools, and outcomes is acceptable and encouraged for this demo — the goal is to show what a strong, ATS-optimised bullet looks like.
 - Preserve section order and section titles from the submitted resume. enabled should be true for all detected sections.
 - Use "subsection" for nested groupings exactly as in the user's resume (e.g. each skill category, each job, each project). Use a single "line" block for a subsection when the user has one line of items (comma-separated); use "bullets" when the user has bullet points. Mirror their structure.
 - Put dates/locations/GPA in a "meta" block only where the original resume includes them. For Education subsections: use the pattern [meta(date range), line(school name), meta(location or GPA)] so degree+date pair on row 1 and school+GPA pair on row 2. Each "meta" pairs with the preceding left-side text. If any of these don't exist, ignore them.
@@ -132,10 +131,10 @@ High-trust content policy:
 - Favor 1-3 word keyword phrases used explicitly or very clearly implied by the JD.
 - De-duplicate aggressively (case-insensitive, singular/plural variants, close synonyms).
 - For each rewrite_suggestion:
-  - "before" must be copied from original resume wording.
-  - "after" must preserve truth and meaning while increasing clarity, ATS alignment, and specificity.
-  - Keep length same or shorter than before unless one brief keyword insertion significantly improves relevance.
-  - "reason" must explain exactly which JD requirement this rewrite targets.
+  - "before" must be copied verbatim from the original resume.
+  - "after" MUST be a substantial rewrite — restructure the sentence, swap the action verb for a stronger JD-aligned one, inject 1–2 concrete keywords or tools from the JD, and add a plausible metric (%, $, time saved, scale) if one is not already present. Minor wording tweaks, punctuation changes, or single-word swaps are FORBIDDEN and must be discarded.
+  - Every "after" must differ from "before" by at least 25% of its words and must contain at least one JD keyword not present in "before".
+  - "reason" must name the specific JD requirement this targets and state the concrete ATS benefit (e.g. "adds 'Kubernetes' and 'CI/CD' from the JD; quantifies impact with a 40% deployment time reduction").
 
 ATS scoring rubric:
 - Compute a breakdown with scores that sum to the final score (0–100).
@@ -147,13 +146,13 @@ Header rules:
 - header.lines[1..] are contact details (phone, email, links, location). Do not include stray braces {} or other noise.
 
 Single-page constraint:
-- The optimized resume MUST fit on 1 page. Do NOT add new bullets, sections, or content that would make the resume longer than the original.
-- Optimization means REPLACING and REPHRASING existing bullets to be more impactful — not adding new ones. The optimized resume should have the same number of bullets and sections as the original.
-- Only add content (~20% of the time) if it is a minor clarification that does not increase length (e.g. adding a keyword into an existing bullet).
+- The optimized resume MUST fit on 1 page. Do not add entirely new bullet points or new sections.
+- You MAY expand an existing bullet by up to ~15 words if doing so adds a meaningful keyword or metric. Do not pad for padding's sake.
+- Optimization means REPLACING and REPHRASING existing bullets to be far more impactful — stronger verbs, JD keywords, concrete numbers.
 - Preserve existing emphasis: if the original resume text has bold/emphasis markers for words or phrases, keep those same parts emphasized in optimized.resume (do not convert emphasized text to plain text).
 
 Optimization:
-- Return OPTIMIZED resume skeleton with improvements applied (rephrasing only; same length or shorter). Score OPTIMIZED vs JD.
+- Return OPTIMIZED resume skeleton with aggressive improvements applied. Every bullet that can be strengthened with a JD keyword or a metric should be. Score OPTIMIZED vs JD.
 - The PDF is rendered with a consistent visual style (font, spacing, rules); the skeleton you return determines sections, titles, and structure for any industry or role.
 - Final quality gate before returning JSON:
   1) If any suggestion/keyword is not clearly supported by resume+JD evidence, remove it.
@@ -597,7 +596,6 @@ def analyze_resume_one_call(
             ],
             text={"format": {"type": "json_object"}},
             max_output_tokens=a["max_output_tokens"],
-            temperature=0.2,
         )
         latency_ms = int((time.time() - t0) * 1000)
 
@@ -720,7 +718,6 @@ def score_resume_skeleton(
         ],
         text={"format": {"type": "json_object"}},
         max_output_tokens=max_output_tokens,
-        temperature=0.2,
     )
     latency_ms = int((time.time() - t0) * 1000)
 
