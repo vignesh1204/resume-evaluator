@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../../Button/CustomButton";
+import { useAuth } from "../../../context/AuthContext";
 
 const FeatureRow = ({ reverse = false, eyebrow, title, desc, bullets, cta }) => {
   return (
@@ -94,6 +95,15 @@ const FeatureRow = ({ reverse = false, eyebrow, title, desc, bullets, cta }) => 
 
 const InfoSection = () => {
   const navigate = useNavigate();
+  const { user, signInWithGoogle } = useAuth();
+
+  const handleCTA = () => {
+    if (user) {
+      navigate("/app");
+    } else {
+      signInWithGoogle();
+    }
+  };
 
   return (
     <section className="w-full">
@@ -113,8 +123,8 @@ const InfoSection = () => {
         ]}
         cta={
           <CustomButton
-            text="Try the App"
-            onClick={() => navigate("/app")}
+            text={user ? "Go to app" : "Sign in to get started"}
+            onClick={handleCTA}
             className="w-48"
           />
         }

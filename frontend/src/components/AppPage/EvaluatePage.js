@@ -3,8 +3,31 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../Button/CustomButton";
 import { useEval } from "../../context/EvalContext";
+import { useAuth } from "../../context/AuthContext";
+import { supabase } from "../../utils/supabase";
 import { analyzeResumeMultipart } from "../../utils/api";
 import NoirShell from "../layout/NoirShell";
+
+const FREE_LIMIT = 10;
+
+async function fetchUsageCount(supabase, userId) {
+  const { data, error } = await supabase
+    .from("user_usage")
+    .select("free_analyses_used")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) return 0;
+  return data?.free_analyses_used ?? 0;
+}
+
+async function incrementUsageCount(supabase, userId, current) {
+  const next = current + 1;
+  await supabase
+    .from("user_usage")
+    .upsert({ user_id: userId, free_analyses_used: next, updated_at: new Date().toISOString() })
+    .eq("user_id", userId);
+  return next;
+}
 
 // Simulated progress: approaches ~88% over ~60s so we don't hit 100% before the request completes.
 const PROGRESS_CAP = 88;
@@ -34,11 +57,33 @@ function ScoreCard({ title, score }) {
   );
 }
 
+function CopyButton({ getText }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(getText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {}
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/60 transition-colors hover:bg-white/10 hover:text-white/85"
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
 function PillList({ title, items }) {
   if (!items || items.length === 0) return null;
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <div className="text-sm font-extrabold">{title}</div>
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-extrabold">{title}</div>
+        <CopyButton getText={() => items.join(", ")} />
+      </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {items.map((x, i) => (
           <span
@@ -72,7 +117,10 @@ function RewriteList({ items }) {
               </div>
             </div>
             <div className="mt-2">
-              <div className="text-xs font-semibold text-white/70">After</div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-white/70">After</div>
+                <CopyButton getText={() => r.after} />
+              </div>
               <div className="mt-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/85 whitespace-pre-wrap">
                 {r.after}
               </div>
@@ -92,6 +140,7 @@ function RewriteList({ items }) {
 export default function EvaluatePage() {
   const navigate = useNavigate();
   const { evalState, setEvalState, resetEval, hasSession } = useEval();
+  const { user } = useAuth();
 
   const [file, setFile] = useState(null);
   const [jd, setJd] = useState(evalState.jobDescription || "");
@@ -104,6 +153,19 @@ export default function EvaluatePage() {
   const progressIntervalRef = useRef(null);
   const progressStartRef = useRef(null);
 
+  const [usageCount, setUsageCount] = useState(0);
+  const [usageLoading, setUsageLoading] = useState(true);
+  const analysesLeft = Math.max(0, FREE_LIMIT - usageCount);
+  const atLimit = usageCount >= FREE_LIMIT;
+
+  useEffect(() => {
+    if (!user?.id) return;
+    fetchUsageCount(supabase, user.id).then((count) => {
+      setUsageCount(count);
+      setUsageLoading(false);
+    });
+  }, [user?.id]);
+
   const analysis = evalState.analysis;
 
   useEffect(() => {
@@ -113,8 +175,8 @@ export default function EvaluatePage() {
   }, []);
 
   const canAnalyze = useMemo(() => {
-    return !!file && jd.trim().length > 0 && !busy;
-  }, [file, jd, busy]);
+    return !!file && jd.trim().length > 0 && !busy && !atLimit && !usageLoading;
+  }, [file, jd, busy, atLimit, usageLoading]);
 
   const onAnalyze = useCallback(async () => {
     setError(null);
@@ -146,6 +208,9 @@ export default function EvaluatePage() {
       }
       setAnalysisProgress(100);
       setTimeout(() => setAnalysisProgress(null), 600);
+
+      const newCount = await incrementUsageCount(supabase, user.id, usageCount);
+      setUsageCount(newCount);
 
       const optimizedSkeleton = result?.optimized?.resume || null;
       const originalScore = result?.original?.ats?.score ?? null;
@@ -192,7 +257,7 @@ export default function EvaluatePage() {
     } finally {
       setBusy(false);
     }
-  }, [file, jd, model, mode, setEvalState]);
+  }, [file, jd, model, mode, setEvalState, usageCount]);
 
   const originalScore = analysis?.original?.ats?.score ?? null;
   const optimizedScore = analysis?.optimized?.ats?.score ?? null;
@@ -300,29 +365,45 @@ export default function EvaluatePage() {
               </div>
 
               <div className="mt-5">
-                <CustomButton
-                  text={busy ? "Analyzing…" : "Analyze"}
-                  onClick={onAnalyze}
-                  disabled={!canAnalyze}
-                  className="w-full noir-btn"
-                />
-                {analysisProgress != null && (
-                  <div className="mt-3">
-                    <div className="flex justify-between text-xs text-white/60 mb-1">
-                      <span>Progress</span>
-                      <span>{analysisProgress}%</span>
+                {atLimit ? (
+                  <div className="rounded-2xl border border-violet-400/25 bg-violet-400/10 p-4">
+                    <div className="text-sm font-extrabold text-violet-200">
+                      Free limit reached
                     </div>
-                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-cyan-400/90 transition-[width] duration-300 ease-out"
-                        style={{ width: `${analysisProgress}%` }}
-                      />
+                    <div className="mt-1 text-xs text-violet-200/70">
+                      You've used all {FREE_LIMIT} free analyses. A paid plan with unlimited analyses is coming soon — stay tuned.
                     </div>
                   </div>
+                ) : (
+                  <>
+                    <CustomButton
+                      text={busy ? "Analyzing…" : "Analyze"}
+                      onClick={onAnalyze}
+                      disabled={!canAnalyze}
+                      className="w-full noir-btn"
+                    />
+                    {analysisProgress != null && (
+                      <div className="mt-3">
+                        <div className="flex justify-between text-xs text-white/60 mb-1">
+                          <span>Progress</span>
+                          <span>{analysisProgress}%</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-cyan-400/90 transition-[width] duration-300 ease-out"
+                            style={{ width: `${analysisProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-2 flex items-center justify-between text-xs text-white/55">
+                      <span>Tip: start with <span className="font-semibold">gpt-5.4-mini</span> + fast.</span>
+                      <span className={analysesLeft <= 3 ? "text-amber-300/80" : "text-white/40"}>
+                        {analysesLeft} / {FREE_LIMIT} free left
+                      </span>
+                    </div>
+                  </>
                 )}
-                <div className="mt-2 text-xs text-white/55">
-                  Tip: start with <span className="font-semibold">gpt-5.4-mini</span> + fast.
-                </div>
               </div>
 
               {error && (

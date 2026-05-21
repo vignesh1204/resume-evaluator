@@ -2,9 +2,19 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../../Button/CustomButton";
 import NoirShell from "../../layout/NoirShell";
+import { useAuth } from "../../../context/AuthContext";
 
 const HeroSection = () => {
   const navigate = useNavigate();
+  const { user, signInWithGoogle } = useAuth();
+
+  const handleCTA = () => {
+    if (user) {
+      navigate("/app");
+    } else {
+      signInWithGoogle();
+    }
+  };
 
   return (
     <NoirShell>
@@ -25,13 +35,18 @@ const HeroSection = () => {
 
         <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row">
           <CustomButton
-            text="Try it now"
-            onClick={() => navigate("/app")}
+            text={user ? "Go to app" : "Sign in to get started"}
+            onClick={handleCTA}
             className="w-56 noir-btn"
           />
           <div className="text-xs noir-muted">
-            Upload PDF • Rescore after edits • Sign in to save sessions
+            {user ? "10 free analyses • Paid plan coming soon" : "Sign in required • 10 free analyses included"}
           </div>
+        </div>
+
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-violet-400/20 bg-violet-400/10 px-4 py-1.5 text-xs text-violet-200/80">
+          <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
+          Pro plan coming soon — unlimited analyses + priority models
         </div>
 
         <div className="mt-14 grid w-full max-w-5xl grid-cols-1 gap-4 sm:grid-cols-3">
