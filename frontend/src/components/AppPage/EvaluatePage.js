@@ -10,14 +10,17 @@ import NoirShell from "../layout/NoirShell";
 
 const FREE_LIMIT = 10;
 
-async function fetchUsageCount(supabase, userId) {
+async function fetchUsage(supabase, userId) {
   const { data, error } = await supabase
     .from("user_usage")
-    .select("free_analyses_used")
+    .select("free_analyses_used, bypass_limit")
     .eq("user_id", userId)
     .maybeSingle();
-  if (error) return 0;
-  return data?.free_analyses_used ?? 0;
+  if (error) return { count: 0, bypass: false };
+  return {
+    count: data?.free_analyses_used ?? 0,
+    bypass: data?.bypass_limit ?? false,
+  };
 }
 
 async function incrementUsageCount(supabase, userId, current) {
@@ -154,14 +157,16 @@ export default function EvaluatePage() {
   const progressStartRef = useRef(null);
 
   const [usageCount, setUsageCount] = useState(0);
+  const [bypassLimit, setBypassLimit] = useState(false);
   const [usageLoading, setUsageLoading] = useState(true);
   const analysesLeft = Math.max(0, FREE_LIMIT - usageCount);
-  const atLimit = usageCount >= FREE_LIMIT;
+  const atLimit = !bypassLimit && usageCount >= FREE_LIMIT;
 
   useEffect(() => {
     if (!user?.id) return;
-    fetchUsageCount(supabase, user.id).then((count) => {
+    fetchUsage(supabase, user.id).then(({ count, bypass }) => {
       setUsageCount(count);
+      setBypassLimit(bypass);
       setUsageLoading(false);
     });
   }, [user?.id]);
@@ -398,9 +403,11 @@ export default function EvaluatePage() {
                     )}
                     <div className="mt-2 flex items-center justify-between text-xs text-white/55">
                       <span>Tip: start with <span className="font-semibold">gpt-5.4-mini</span> + fast.</span>
-                      <span className={analysesLeft <= 3 ? "text-amber-300/80" : "text-white/40"}>
-                        {analysesLeft} / {FREE_LIMIT} free left
-                      </span>
+                      {!bypassLimit && (
+                        <span className={analysesLeft <= 3 ? "text-amber-300/80" : "text-white/40"}>
+                          {analysesLeft} / {FREE_LIMIT} free left
+                        </span>
+                      )}
                     </div>
                   </>
                 )}
