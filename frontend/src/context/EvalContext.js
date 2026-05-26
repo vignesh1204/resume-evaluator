@@ -13,6 +13,9 @@ const DEFAULT_STATE = {
   mode: "fast",
   useCache: true,
 
+  // DB row id for the current evaluation (used by PdfPage to upsert editor state)
+  evaluationId: null,
+
   // last analysis response
   analysis: null,
 

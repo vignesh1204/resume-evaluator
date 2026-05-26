@@ -32,6 +32,28 @@ async function incrementUsageCount(supabase, userId, current) {
   return next;
 }
 
+async function insertEvaluation(supabase, userId, { file, jd, model, mode, result }) {
+  const telemetry = result?.telemetry || {};
+  const { data, error } = await supabase
+    .from("evaluations")
+    .insert({
+      user_id: userId,
+      resume_file_name: file?.name || "",
+      job_description: jd,
+      model,
+      mode,
+      original_ats_score: result?.original?.ats?.score ?? null,
+      optimized_ats_score: result?.optimized?.ats?.score ?? null,
+      estimated_cost_usd: telemetry.estimated_cost_usd ?? null,
+      cache_hit: telemetry.cache_hit ?? null,
+      analysis: result,
+    })
+    .select("id")
+    .single();
+  if (error) return null;
+  return data?.id ?? null;
+}
+
 // Simulated progress: approaches ~88% over ~60s so we don't hit 100% before the request completes.
 const PROGRESS_CAP = 88;
 const PROGRESS_TAU = 28; // seconds for ~63% of cap
@@ -214,7 +236,10 @@ export default function EvaluatePage() {
       setAnalysisProgress(100);
       setTimeout(() => setAnalysisProgress(null), 600);
 
-      const newCount = await incrementUsageCount(supabase, user.id, usageCount);
+      const [newCount, evaluationId] = await Promise.all([
+        incrementUsageCount(supabase, user.id, usageCount),
+        insertEvaluation(supabase, user.id, { file, jd, model, mode, result }),
+      ]);
       setUsageCount(newCount);
 
       const optimizedSkeleton = result?.optimized?.resume || null;
@@ -232,6 +257,7 @@ export default function EvaluatePage() {
         mode,
         useCache: true,
         resumeFileName: file?.name || "",
+        evaluationId,
         analysis: result,
 
         // important: PDF generation should use this canonical optimized skeleton

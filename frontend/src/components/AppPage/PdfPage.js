@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../Button/CustomButton";
 import { useEval } from "../../context/EvalContext";
+import { useAuth } from "../../context/AuthContext";
+import { supabase } from "../../utils/supabase";
 import NoirShell from "../layout/NoirShell";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:5001";
@@ -95,6 +97,7 @@ const Modal = ({ open, onClose, children }) => {
 export default function PdfPage() {
   const navigate = useNavigate();
   const { evalState, setEvalState } = useEval();
+  const { user } = useAuth();
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -231,6 +234,20 @@ export default function PdfPage() {
       setProgress(100);
       setPdfBlob(blob);
       setPdfPreviewUrl(url);
+
+      // Persist editor state to DB so the session is restorable from any device
+      if (evalState.evaluationId && user?.id) {
+        supabase
+          .from("evaluations")
+          .update({
+            editable_skeleton: evalState.editableSkeleton,
+            section_order: sectionOrder,
+            enabled_section_ids: enabledSectionIds,
+          })
+          .eq("id", evalState.evaluationId)
+          .eq("user_id", user.id)
+          .then(() => {});
+      }
     } catch (e) {
       stopProgress();
       setProgress(0);
@@ -249,6 +266,14 @@ export default function PdfPage() {
       document.body.appendChild(a);
       a.click();
       a.remove();
+
+      // Log the download
+      if (evalState.evaluationId && user?.id) {
+        supabase
+          .from("pdf_exports")
+          .insert({ evaluation_id: evalState.evaluationId, user_id: user.id })
+          .then(() => {});
+      }
     } catch (e) {
       setError(e?.message || "Download failed.");
     }
