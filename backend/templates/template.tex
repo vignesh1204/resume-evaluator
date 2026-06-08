@@ -8,7 +8,7 @@
 \newlist{tightitemize}{itemize}{1}
 \setlist[tightitemize]{
   label=$\cdot$,
-  leftmargin=0em,
+  leftmargin=1.5em,
   itemsep=%%__ITEMSEP__%%,
   topsep=%%__TOPSEP__%%,
   parsep=0pt,
@@ -22,10 +22,10 @@
 \def\addressskip{\vspace{%%__ADDRESS_SKIP__%%}}
 \setlength{\parskip}{0pt}
 
-% Replace rSection: no list env, just a group — zero extra vertical space
+% Replace rSection: no list env, just a group — guaranteed paragraph break before title
 \renewenvironment{rSection}[1]{%
-  \sectionskip
-  \MakeUppercase{{\bf #1}}%
+  \par\vspace{%%__SECTION_SKIP__%%}%
+  \noindent\MakeUppercase{{\bf #1}}%
   \sectionlineskip
   \hrule
   \vspace{%%__AFTER_RULE_SKIP__%%}%
@@ -39,7 +39,6 @@
 
 \begin{document}
 \flushbottom
-\vspace*{%%__TOP_PULL__%%}
 
 %%__BODY__%%
 

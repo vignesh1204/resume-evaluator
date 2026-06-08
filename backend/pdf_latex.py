@@ -572,6 +572,7 @@ def _blocks_to_latex(
     section_is_skills = any(hint in section_lower for hint in _SKILLS_SECTION_HINTS)
     section_is_education = "education" in section_lower
     enable_bullet_bold = not section_is_skills
+    prev_subsection_had_bullets = False
     for b in blocks or []:
         if not isinstance(b, dict):
             continue
@@ -614,8 +615,17 @@ def _blocks_to_latex(
             if section_is_education:
                 edu_rows = _education_rows_from_subsection(str(b.get("title", "")).strip(), sub_blocks)
                 if edu_rows:
+                    if prev_subsection_had_bullets:
+                        out.append(r"\vspace{5pt}")
                     out.extend(edu_rows)
+                    prev_subsection_had_bullets = False
                     continue
+            has_bullets = any(
+                isinstance(sb, dict) and sb.get("type") == "bullets"
+                for sb in sub_blocks
+            )
+            if prev_subsection_had_bullets and not section_is_skills:
+                out.append(r"\vspace{5pt}")
             if title and _subsection_is_inline_only(sub_blocks):
                 content = _subsection_inline_content(sub_blocks)
                 if content:
@@ -630,6 +640,7 @@ def _blocks_to_latex(
                         enable_bullet_bold=enable_bullet_bold,
                     )
                 )
+            prev_subsection_had_bullets = has_bullets
         else:
             continue
 
@@ -691,7 +702,6 @@ TOKEN_SECTION_SKIP = "%%__SECTION_SKIP__%%"
 TOKEN_SECTION_LINE_SKIP = "%%__SECTION_LINE_SKIP__%%"
 TOKEN_ADDRESS_SKIP = "%%__ADDRESS_SKIP__%%"
 TOKEN_AFTER_RULE_SKIP = "%%__AFTER_RULE_SKIP__%%"
-TOKEN_TOP_PULL = "%%__TOP_PULL__%%"
 
 
 def _resume_density_score(resume: Dict[str, Any]) -> int:
@@ -742,32 +752,29 @@ def _layout_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "itemsep": "0pt plus 0.6pt minus 0.2pt",
             "topsep": "1pt plus 0.8pt minus 0.2pt",
-            "section_skip": "1pt plus 2pt minus 0.5pt",
+            "section_skip": "6pt plus 2pt minus 0.5pt",
             "section_line_skip": "4pt plus 1pt minus 0.5pt",
             "address_skip": "1pt",
-            "after_rule_skip": "1pt plus 0.8pt minus 0.2pt",
-            "top_pull": "-2mm",
+            "after_rule_skip": "2pt plus 0.8pt minus 0.2pt",
             "stretch_sections": True,
         }
     if density >= 62:
         return {
             "itemsep": "-2pt plus 0.2pt minus 0.6pt",
             "topsep": "0pt",
-            "section_skip": "0pt",
+            "section_skip": "4pt",
             "section_line_skip": "3pt",
             "address_skip": "0pt",
-            "after_rule_skip": "0.5pt",
-            "top_pull": "-3mm",
+            "after_rule_skip": "1pt",
             "stretch_sections": False,
         }
     return {
         "itemsep": "-1pt plus 0.3pt minus 0.4pt",
         "topsep": "0.5pt plus 0.3pt minus 0.2pt",
-        "section_skip": "0.5pt plus 0.8pt minus 0.3pt",
+        "section_skip": "5pt plus 0.8pt minus 0.3pt",
         "section_line_skip": "4pt",
         "address_skip": "1pt",
         "after_rule_skip": "1pt",
-        "top_pull": "-3mm",
         "stretch_sections": False,
     }
 
@@ -854,7 +861,6 @@ def render_main_tex_from_template(
     out = out.replace(TOKEN_SECTION_LINE_SKIP, str(profile["section_line_skip"]))
     out = out.replace(TOKEN_ADDRESS_SKIP, str(profile["address_skip"]))
     out = out.replace(TOKEN_AFTER_RULE_SKIP, str(profile["after_rule_skip"]))
-    out = out.replace(TOKEN_TOP_PULL, str(profile["top_pull"]))
 
     # Guard: make sure body token existed
     if TOKEN_BODY in template_tex and TOKEN_BODY in out:
@@ -919,11 +925,10 @@ def _ultra_compact_layout_profile() -> Dict[str, Any]:
     return {
         "itemsep": "-3pt",
         "topsep": "0pt",
-        "section_skip": "0pt",
+        "section_skip": "4pt",
         "section_line_skip": "2pt",
         "address_skip": "0pt",
-        "after_rule_skip": "0pt",
-        "top_pull": "-4mm",
+        "after_rule_skip": "0.5pt",
         "stretch_sections": False,
     }
 
@@ -1010,15 +1015,31 @@ def compile_pdf_from_skeleton(
     *,
     highlight_keywords: Optional[List[str]] = None,
 ) -> bytes:
-    candidates = [
+    # Phase 1: try to fit on 1 page without truncating any content.
+    # A clean 2-page resume is always better than a truncated 1-page one.
+    clean_candidates = [
         {"resume": resume, "layout": None},
         {"resume": resume, "layout": _ultra_compact_layout_profile()},
+    ]
+
+    # Phase 2: only truncate if clean renders produce 3+ pages.
+    truncated_candidates = [
+        {
+            "resume": _tighten_resume_content(
+                resume,
+                max_bullets_per_group=5,
+                max_bullet_chars=220,
+                max_line_chars=200,
+                drop_optional_sections=False,
+            ),
+            "layout": _ultra_compact_layout_profile(),
+        },
         {
             "resume": _tighten_resume_content(
                 resume,
                 max_bullets_per_group=4,
-                max_bullet_chars=170,
-                max_line_chars=160,
+                max_bullet_chars=190,
+                max_line_chars=170,
                 drop_optional_sections=False,
             ),
             "layout": _ultra_compact_layout_profile(),
@@ -1027,18 +1048,8 @@ def compile_pdf_from_skeleton(
             "resume": _tighten_resume_content(
                 resume,
                 max_bullets_per_group=3,
-                max_bullet_chars=140,
-                max_line_chars=130,
-                drop_optional_sections=False,
-            ),
-            "layout": _ultra_compact_layout_profile(),
-        },
-        {
-            "resume": _tighten_resume_content(
-                resume,
-                max_bullets_per_group=2,
-                max_bullet_chars=115,
-                max_line_chars=110,
+                max_bullet_chars=160,
+                max_line_chars=145,
                 drop_optional_sections=True,
             ),
             "layout": _ultra_compact_layout_profile(),
@@ -1049,7 +1060,33 @@ def compile_pdf_from_skeleton(
     best_pages: Optional[int] = None
     last_error: Optional[Exception] = None
 
-    for c in candidates:
+    # Phase 1: try clean (no truncation), accept up to 2 pages
+    for c in clean_candidates:
+        try:
+            main_tex = render_main_tex_from_template(
+                c["resume"],
+                highlight_keywords=highlight_keywords,
+                layout_override=c["layout"],
+            )
+            pdf_bytes = _compile_latex_tex_to_pdf_bytes(main_tex)
+            page_count = _count_pdf_pages(pdf_bytes)
+
+            if best_pages is None or page_count < best_pages:
+                best_pages = page_count
+                best_pdf = pdf_bytes
+
+            if page_count <= 1:
+                return pdf_bytes
+        except Exception as e:
+            last_error = e
+            continue
+
+    # If we have a clean 2-page result, prefer it over any truncated version
+    if best_pdf is not None and best_pages is not None and best_pages <= 2:
+        return best_pdf
+
+    # Phase 2: content is 3+ pages — truncate to get it to 2 or 1 page
+    for c in truncated_candidates:
         try:
             main_tex = render_main_tex_from_template(
                 c["resume"],
