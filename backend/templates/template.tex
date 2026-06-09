@@ -3,6 +3,7 @@
 
 \usepackage[left=0.4in,top=0.4in,right=0.4in,bottom=0.4in]{geometry}
 \usepackage{enumitem}
+% hyperref is loaded by resume.cls — \href{}{} commands work as-is
 
 % tightitemize: compact bullets matching rSubsection style
 \newlist{tightitemize}{itemize}{1}
@@ -21,6 +22,7 @@
 \def\nameskip{\smallskip}
 \def\addressskip{\vspace{%%__ADDRESS_SKIP__%%}}
 \setlength{\parskip}{0pt}
+\AtBeginDocument{\setlength{\parskip}{0pt}\setlength{\parindent}{0pt}}
 
 % Replace rSection: no list env, just a group — guaranteed paragraph break before title
 \renewenvironment{rSection}[1]{%
@@ -38,7 +40,7 @@
 \address{%%__CONTACT__%%}
 
 \begin{document}
-\flushbottom
+\raggedbottom
 
 %%__BODY__%%
 

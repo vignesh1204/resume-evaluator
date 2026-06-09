@@ -150,6 +150,7 @@ Single-page constraint:
 - You MAY expand an existing bullet by up to ~15 words if doing so adds a meaningful keyword or metric. Do not pad for padding's sake.
 - Optimization means REPLACING and REPHRASING existing bullets to be far more impactful — stronger verbs, JD keywords, concrete numbers.
 - Preserve existing emphasis: if the original resume text has bold/emphasis markers for words or phrases, keep those same parts emphasized in optimized.resume (do not convert emphasized text to plain text).
+- Preserve hyperlinks: if a bullet or line contains a markdown link like [text](url), copy it exactly into the optimized skeleton. Never strip URLs from the output.
 
 Optimization:
 - Return OPTIMIZED resume skeleton with aggressive improvements applied. Every bullet that can be strengthened with a JD keyword or a metric should be. Score OPTIMIZED vs JD.

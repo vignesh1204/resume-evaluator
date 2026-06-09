@@ -46,7 +46,20 @@ _LATEX_ESCAPE_MAP = {
     "^": r"\textasciicircum{}",
 }
 
-_BOLD_TOKEN_RE = re.compile(r"(\\textbf\{[^{}]+\}|\*\*[^*]+\*\*|__[^_]+__)")
+_BOLD_TOKEN_RE = re.compile(r"(\\href\{[^{}]+\}\{[^{}]*\}|\\textbf\{[^{}]+\}|\*\*[^*]+\*\*|__[^_]+__)")
+_MARKDOWN_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
+# Combined contact-line scanner: markdown link first so [text](url) is consumed before
+# the bare-URL branch can grab the https:// inside it.
+# Group 1+2: markdown [display](url)   Group 3: email   Group 4: bare/full URL
+_CONTACT_LINK_RE = re.compile(
+    r"\[([^\]]+)\]\((https?://[^\)]+)\)"                               # group 1+2: markdown link
+    r"|([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})"          # group 3: email
+    r"|(https?://\S+"                                                  # group 4: https/http
+    r"|www\.\S+"                                                       #   or www.
+    r"|(?:[a-zA-Z0-9\-]+\.)+(?:com|net|org|io|dev|app|ai|co|edu"     #   or bare domain
+    r"|gov|me|info|tech|us|uk|ca|au)(?:/\S*)?)",                      #   with known TLD
+    re.IGNORECASE,
+)
 
 
 def _normalize_unicode_for_latex(s: str) -> str:
@@ -66,6 +79,15 @@ def _latex_escape_plain(s: str) -> str:
     return out
 
 
+def _apply_markdown_links(s: str) -> str:
+    """Replace [text](url) markdown with LaTeX \\href{url}{text}."""
+    def _replace(m: re.Match) -> str:
+        text = _latex_escape_plain(m.group(1).strip())
+        url = m.group(2).strip()
+        return r"\href{" + url + r"}{" + text + r"}"
+    return _MARKDOWN_LINK_RE.sub(_replace, s)
+
+
 def latex_escape(s: str) -> str:
     """
     Escape LaTeX-special characters while preserving bold emphasis markers:
@@ -75,10 +97,15 @@ def latex_escape(s: str) -> str:
     """
     if not isinstance(s, str):
         return ""
+    s = _apply_markdown_links(s)   # handle [text](url) before escaping
     parts = _BOLD_TOKEN_RE.split(s)
     out_parts: List[str] = []
     for part in parts:
         if not part:
+            continue
+        if part.startswith(r"\href{") and part.endswith("}"):
+            # Already a fully-formed \href{url}{text} — pass through as-is
+            out_parts.append(part)
             continue
         if part.startswith(r"\textbf{") and part.endswith("}"):
             inner = part[8:-1].strip()
@@ -341,6 +368,8 @@ def _subsection_header_rows(
     education_mode: bool,
     boldener: Optional[_KeywordBoldener],
     enable_bullet_bold: bool,
+    bullet_compress: str = "-3pt",
+    pre_list_compress: str = "-3pt",
 ) -> List[str]:
     """
     Render subsection header rows with flexible (left, right) pairing.
@@ -420,7 +449,7 @@ def _subsection_header_rows(
                 # Avoid extra blank gap before list: no forced linebreak here.
                 out.append(_flush_left(left_is_title, with_break=False))
                 current_left = None
-            out.append(r"\vspace{-3pt}")
+            out.append(r"\vspace{" + pre_list_compress + r"}")
             out.append(r"\begin{tightitemize}")
             for it in (blk.get("items") or []):
                 if isinstance(it, str) and it.strip():
@@ -430,7 +459,7 @@ def _subsection_header_rows(
                         item_txt = latex_escape(it.strip())
                     out.append(r"\item " + item_txt)
             out.append(r"\end{tightitemize}")
-            out.append(r"\vspace{-3pt}")
+            out.append(r"\vspace{" + bullet_compress + r"}")
 
     if current_left is not None and not seen_bullets:
         out.append(_flush_left(left_is_title))
@@ -566,6 +595,9 @@ def _blocks_to_latex(
     *,
     section_title: str = "",
     boldener: Optional[_KeywordBoldener] = None,
+    subsection_gap: str = "3pt",
+    bullet_compress: str = "-3pt",
+    pre_list_compress: str = "-3pt",
 ) -> List[str]:
     out: List[str] = []
     section_lower = section_title.lower()
@@ -603,12 +635,12 @@ def _blocks_to_latex(
                 else:
                     items.append(latex_escape(str(x).strip()))
             if items:
-                out.append(r"\vspace{-3pt}")
+                out.append(r"\vspace{" + pre_list_compress + r"}")
                 out.append(r"\begin{tightitemize}")
                 for it in items:
                     out.append(r"\item " + it)
                 out.append(r"\end{tightitemize}")
-                out.append(r"\vspace{-3pt}")
+                out.append(r"\vspace{" + bullet_compress + r"}")
         elif t == "subsection":
             title = latex_escape(str(b.get("title", "")).strip())
             sub_blocks = b.get("blocks", []) or []
@@ -616,7 +648,7 @@ def _blocks_to_latex(
                 edu_rows = _education_rows_from_subsection(str(b.get("title", "")).strip(), sub_blocks)
                 if edu_rows:
                     if prev_subsection_had_bullets:
-                        out.append(r"\vspace{5pt}")
+                        out.append(r"\vspace{" + subsection_gap + r"}")
                     out.extend(edu_rows)
                     prev_subsection_had_bullets = False
                     continue
@@ -625,7 +657,7 @@ def _blocks_to_latex(
                 for sb in sub_blocks
             )
             if prev_subsection_had_bullets and not section_is_skills:
-                out.append(r"\vspace{5pt}")
+                out.append(r"\vspace{" + subsection_gap + r"}")
             if title and _subsection_is_inline_only(sub_blocks):
                 content = _subsection_inline_content(sub_blocks)
                 if content:
@@ -638,6 +670,8 @@ def _blocks_to_latex(
                         education_mode=("education" in section_title.lower()),
                         boldener=boldener,
                         enable_bullet_bold=enable_bullet_bold,
+                        bullet_compress=bullet_compress,
+                        pre_list_compress=pre_list_compress,
                     )
                 )
             prev_subsection_had_bullets = has_bullets
@@ -652,6 +686,9 @@ def skeleton_to_latex_body(
     *,
     boldener: Optional[_KeywordBoldener] = None,
     stretch_sections: bool = False,
+    subsection_gap: str = "3pt",
+    bullet_compress: str = "-3pt",
+    pre_list_compress: str = "-3pt",
 ) -> str:
     """
     Builds LaTeX body from the resume skeleton. Structure is preserved: section
@@ -681,7 +718,14 @@ def skeleton_to_latex_body(
 
         blocks = sec.get("blocks", []) or []
         if isinstance(blocks, list):
-            lines.extend(_blocks_to_latex(blocks, section_title=title, boldener=boldener))
+            lines.extend(_blocks_to_latex(
+                blocks,
+                section_title=title,
+                boldener=boldener,
+                subsection_gap=subsection_gap,
+                bullet_compress=bullet_compress,
+                pre_list_compress=pre_list_compress,
+            ))
 
         lines.append(r"\end{rSection}")
         rendered += 1
@@ -750,32 +794,41 @@ def _layout_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
     density = _resume_density_score(resume)
     if density <= 28:
         return {
-            "itemsep": "0pt plus 0.6pt minus 0.2pt",
+            "itemsep": "0pt",
             "topsep": "1pt plus 0.8pt minus 0.2pt",
-            "section_skip": "6pt plus 2pt minus 0.5pt",
-            "section_line_skip": "4pt plus 1pt minus 0.5pt",
+            "section_skip": "5pt",
+            "section_line_skip": "3pt",
             "address_skip": "1pt",
-            "after_rule_skip": "2pt plus 0.8pt minus 0.2pt",
+            "after_rule_skip": "2pt",
             "stretch_sections": True,
+            "subsection_gap": "5pt",
+            "bullet_compress": "-3pt",
+            "pre_list_compress": "-4pt",
         }
     if density >= 62:
         return {
-            "itemsep": "-2pt plus 0.2pt minus 0.6pt",
+            "itemsep": "0pt",
             "topsep": "0pt",
-            "section_skip": "4pt",
+            "section_skip": "2pt",
             "section_line_skip": "3pt",
             "address_skip": "0pt",
-            "after_rule_skip": "1pt",
+            "after_rule_skip": "3pt",
             "stretch_sections": False,
+            "subsection_gap": "2pt",
+            "bullet_compress": "-3pt",
+            "pre_list_compress": "-7pt",
         }
     return {
-        "itemsep": "-1pt plus 0.3pt minus 0.4pt",
-        "topsep": "0.5pt plus 0.3pt minus 0.2pt",
-        "section_skip": "5pt plus 0.8pt minus 0.3pt",
-        "section_line_skip": "4pt",
+        "itemsep": "0pt",
+        "topsep": "0pt",
+        "section_skip": "2pt",
+        "section_line_skip": "3pt",
         "address_skip": "1pt",
         "after_rule_skip": "1pt",
         "stretch_sections": False,
+        "subsection_gap": "3pt",
+        "bullet_compress": "-3pt",
+        "pre_list_compress": "-5pt",
     }
 
 def _clean_header_text(s: str) -> str:
@@ -789,6 +842,16 @@ def _clean_header_text(s: str) -> str:
     return out.strip()
 
 
+def _escape_plain_segment(s: str) -> str:
+    """Escape LaTeX specials without stripping leading/trailing whitespace."""
+    out = s.replace("{", "").replace("}", "")
+    out = _normalize_unicode_for_latex(out)
+    for ch, esc in (("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
+                    ("_", r"\_"), ("~", r"\textasciitilde{}"), ("^", r"\textasciicircum{}")):
+        out = out.replace(ch, esc)
+    return out  # no .strip() — preserve spaces between items
+
+
 def _looks_like_name(s: str) -> bool:
     """Heuristic: a name line is mostly alphabetic words, no @ or digits-heavy."""
     stripped = s.strip()
@@ -796,6 +859,59 @@ def _looks_like_name(s: str) -> bool:
         return False
     alpha_count = sum(1 for c in stripped if c.isalpha())
     return alpha_count > len(stripped) * 0.5
+
+
+def _process_contact_part(raw: str) -> str:
+    """
+    Inline-substitute each email/URL token with its own \\href{}{}.
+    Plain text (city, phone, separators) is left as escaped text.
+    This ensures each link is independent — not the whole string wrapped as one link.
+    """
+    stripped = str(raw).strip()
+    result: List[str] = []
+    pos = 0
+    for m in _CONTACT_LINK_RE.finditer(stripped):
+        if m.start() > pos:
+            result.append(_escape_plain_segment(stripped[pos:m.start()]))
+        if m.group(1) and m.group(2):  # markdown [display](url)
+            display = _latex_escape_plain(m.group(1).strip())
+            url = m.group(2).strip()
+            result.append(r"\href{" + url + r"}{" + display + r"}")
+        elif m.group(3):  # email
+            raw_token = m.group(3)
+            token = raw_token.rstrip(".,;:)")
+            trailing = raw_token[len(token):]
+            display = _clean_header_text(token)
+            result.append(r"\href{mailto:" + token + r"}{" + display + r"}")
+            if trailing:
+                result.append(_escape_plain_segment(trailing))
+        else:  # bare/full URL (group 4)
+            raw_token = m.group(4)
+            token = raw_token.rstrip(".,;:)")
+            trailing = raw_token[len(token):]
+            url = token if token.startswith("http") else "https://" + token
+            display = _clean_header_text(token)
+            result.append(r"\href{" + url + r"}{" + display + r"}")
+            if trailing:
+                result.append(_escape_plain_segment(trailing))
+        pos = m.end()
+    if pos < len(stripped):
+        result.append(_escape_plain_segment(stripped[pos:]))
+    return "".join(result) if result else _clean_header_text(stripped)
+
+
+def _split_contact_line(line: str) -> List[str]:
+    """Split a contact line into individual pieces on known separator chars."""
+    for sep in [" · ", " | ", " ⋄ ", " • ", "·", " | "]:
+        if sep in line:
+            parts = [p.strip() for p in line.split(sep) if p.strip()]
+            if len(parts) > 1:
+                return parts
+    # No separator found — try splitting on 2+ spaces
+    parts = [p.strip() for p in re.split(r"  +", line) if p.strip()]
+    if len(parts) > 1:
+        return parts
+    return [line.strip()] if line.strip() else []
 
 
 def _derive_name_and_contact(resume: Dict[str, Any]) -> tuple[str, str]:
@@ -812,19 +928,24 @@ def _derive_name_and_contact(resume: Dict[str, Any]) -> tuple[str, str]:
     if not isinstance(lines, list):
         return ("", "")
 
-    clean = [_clean_header_text(str(x)) for x in lines if isinstance(x, str) and str(x).strip()]
-    if not clean:
+    raw_clean = [str(x) for x in lines if isinstance(x, str) and str(x).strip()]
+    if not raw_clean:
         return ("", "")
 
     name_idx = 0
-    for i, line in enumerate(clean):
+    for i, line in enumerate(raw_clean):
         if _looks_like_name(line):
             name_idx = i
             break
 
-    name = clean[name_idx]
-    contact_parts = [l for j, l in enumerate(clean) if j != name_idx]
-    contact = r" \\ ".join(contact_parts)
+    name = _clean_header_text(raw_clean[name_idx])
+    all_contact_pieces: List[str] = []
+    for j, line in enumerate(raw_clean):
+        if j == name_idx:
+            continue
+        for piece in _split_contact_line(line):
+            all_contact_pieces.append(_process_contact_part(piece))
+    contact = r" \\ ".join(all_contact_pieces)
     return (name, contact)
 
 
@@ -848,6 +969,9 @@ def render_main_tex_from_template(
         resume,
         boldener=boldener,
         stretch_sections=bool(profile.get("stretch_sections", False)),
+        subsection_gap=str(profile.get("subsection_gap", "3pt")),
+        bullet_compress=str(profile.get("bullet_compress", "-3pt")),
+        pre_list_compress=str(profile.get("pre_list_compress", "-3pt")),
     )
     name, contact = _derive_name_and_contact(resume)
 
@@ -923,13 +1047,16 @@ def _count_pdf_pages(pdf_bytes: bytes) -> int:
 
 def _ultra_compact_layout_profile() -> Dict[str, Any]:
     return {
-        "itemsep": "-3pt",
+        "itemsep": "-1pt",
         "topsep": "0pt",
-        "section_skip": "4pt",
+        "section_skip": "1pt",
         "section_line_skip": "2pt",
         "address_skip": "0pt",
-        "after_rule_skip": "0.5pt",
+        "after_rule_skip": "1.5pt",
         "stretch_sections": False,
+        "subsection_gap": "1pt",
+        "bullet_compress": "-3pt",
+        "pre_list_compress": "-8pt",
     }
 
 
@@ -1014,16 +1141,15 @@ def compile_pdf_from_skeleton(
     resume: Dict[str, Any],
     *,
     highlight_keywords: Optional[List[str]] = None,
-) -> bytes:
-    # Phase 1: try to fit on 1 page without truncating any content.
-    # A clean 2-page resume is always better than a truncated 1-page one.
-    clean_candidates = [
+) -> tuple[bytes, int]:
+    """
+    Tries progressively more compact layouts and content truncation until the
+    resume fits on 1 page. Returns (pdf_bytes, page_count). page_count will be
+    1 if any candidate succeeded; otherwise the minimum achieved.
+    """
+    candidates = [
         {"resume": resume, "layout": None},
         {"resume": resume, "layout": _ultra_compact_layout_profile()},
-    ]
-
-    # Phase 2: only truncate if clean renders produce 3+ pages.
-    truncated_candidates = [
         {
             "resume": _tighten_resume_content(
                 resume,
@@ -1060,8 +1186,7 @@ def compile_pdf_from_skeleton(
     best_pages: Optional[int] = None
     last_error: Optional[Exception] = None
 
-    # Phase 1: try clean (no truncation), accept up to 2 pages
-    for c in clean_candidates:
+    for c in candidates:
         try:
             main_tex = render_main_tex_from_template(
                 c["resume"],
@@ -1076,38 +1201,13 @@ def compile_pdf_from_skeleton(
                 best_pdf = pdf_bytes
 
             if page_count <= 1:
-                return pdf_bytes
-        except Exception as e:
-            last_error = e
-            continue
-
-    # If we have a clean 2-page result, prefer it over any truncated version
-    if best_pdf is not None and best_pages is not None and best_pages <= 2:
-        return best_pdf
-
-    # Phase 2: content is 3+ pages — truncate to get it to 2 or 1 page
-    for c in truncated_candidates:
-        try:
-            main_tex = render_main_tex_from_template(
-                c["resume"],
-                highlight_keywords=highlight_keywords,
-                layout_override=c["layout"],
-            )
-            pdf_bytes = _compile_latex_tex_to_pdf_bytes(main_tex)
-            page_count = _count_pdf_pages(pdf_bytes)
-
-            if best_pages is None or page_count < best_pages:
-                best_pages = page_count
-                best_pdf = pdf_bytes
-
-            if page_count <= 1:
-                return pdf_bytes
+                return (pdf_bytes, 1)
         except Exception as e:
             last_error = e
             continue
 
     if best_pdf is not None:
-        return best_pdf
+        return (best_pdf, best_pages or 1)
 
     if last_error is not None:
         raise last_error

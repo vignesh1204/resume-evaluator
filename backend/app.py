@@ -27,6 +27,7 @@ CORS(
     resources={r"/*": {"origins": allowed_origins}},
     methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["X-Page-Count"],
 )
 
 DEFAULT_MODE = os.getenv("RESUME_MODE", "quality")
@@ -191,7 +192,7 @@ def generate_pdf():
         # Apply ordering + enabled selection
         resume = apply_order_and_enabled(resume, section_order, enabled_ids)
 
-        pdf_bytes = compile_pdf_from_skeleton(
+        pdf_bytes, page_count = compile_pdf_from_skeleton(
             resume,
             highlight_keywords=keywords,
         )
@@ -201,12 +202,14 @@ def generate_pdf():
         tmp.flush()
         tmp.close()
 
-        return send_file(
+        response = send_file(
             tmp.name,
             mimetype="application/pdf",
             as_attachment=False,
             download_name="Resume_Optimized.pdf",
         )
+        response.headers["X-Page-Count"] = str(page_count)
+        return response
 
     except Exception as e:
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500

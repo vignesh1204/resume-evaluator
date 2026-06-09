@@ -24,14 +24,77 @@ def _extract_text_pdfplumber(pdf_path: str) -> str:
     return "\n".join(parts)
 
 
+def _extract_text_with_links_pymupdf(pdf_path: str) -> str:
+    """Extract text preserving hyperlinks as [text](url) markdown."""
+    import fitz
+    doc = fitz.open(pdf_path)
+    page_texts: List[str] = []
+    for page in doc:
+        links = page.get_links()  # list of {from: Rect, uri: str, ...}
+        link_rects = [(fitz.Rect(lk["from"]), lk.get("uri", "")) for lk in links if lk.get("uri")]
+
+        blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE).get("blocks", [])
+        lines_out: List[str] = []
+        for block in blocks:
+            if block.get("type") != 0:  # skip image blocks
+                continue
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                # Build list of (text, uri_or_None) per span
+                span_tokens: List[tuple] = []
+                for span in spans:
+                    stext = span.get("text", "")
+                    if not stext.strip():
+                        span_tokens.append((stext, None))
+                        continue
+                    sbbox = fitz.Rect(span["bbox"])
+                    matched_uri = None
+                    for lrect, uri in link_rects:
+                        if uri and sbbox.intersects(lrect):
+                            # Check substantial overlap in y
+                            y_overlap = min(sbbox.y1, lrect.y1) - max(sbbox.y0, lrect.y0)
+                            y_height = sbbox.y1 - sbbox.y0
+                            if y_height > 0 and y_overlap / y_height > 0.4:
+                                matched_uri = uri
+                                break
+                    span_tokens.append((stext, matched_uri))
+
+                # Merge consecutive spans with same URI
+                line_parts: List[str] = []
+                i = 0
+                while i < len(span_tokens):
+                    text, uri = span_tokens[i]
+                    if uri:
+                        # Collect all consecutive spans with same URI
+                        combined = text
+                        j = i + 1
+                        while j < len(span_tokens) and span_tokens[j][1] == uri:
+                            combined += span_tokens[j][0]
+                            j += 1
+                        combined = combined.strip()
+                        if combined:
+                            line_parts.append(f"[{combined}]({uri})")
+                        i = j
+                    else:
+                        line_parts.append(text)
+                        i += 1
+                lines_out.append("".join(line_parts))
+        page_texts.append("\n".join(lines_out))
+    doc.close()
+    return "\n".join(page_texts)
+
+
 def extract_text_from_pdf(pdf_path: str) -> str:
     """
-    Try PyMuPDF first (better extraction), fallback to pdfplumber.
+    Try PyMuPDF with link extraction first, fallback to plain PyMuPDF, then pdfplumber.
     """
     try:
-        return _extract_text_pymupdf(pdf_path)
+        return _extract_text_with_links_pymupdf(pdf_path)
     except Exception:
-        return _extract_text_pdfplumber(pdf_path)
+        try:
+            return _extract_text_pymupdf(pdf_path)
+        except Exception:
+            return _extract_text_pdfplumber(pdf_path)
 
 
 # -------------------------

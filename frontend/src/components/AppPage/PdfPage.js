@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CustomButton from "../Button/CustomButton";
 import { useEval } from "../../context/EvalContext";
@@ -64,6 +64,88 @@ function buildInlineDiff(beforeText, afterText) {
   return ops;
 }
 
+function extractBullets(skeleton) {
+  const bullets = [];
+  if (!skeleton || !Array.isArray(skeleton.sections)) return bullets;
+  skeleton.sections.forEach((section, secIdx) => {
+    const sectionId = section?.id || String(secIdx);
+    const sectionTitle = section?.title || sectionId;
+    function walkBlocks(blocks, pathPrefix, subsectionTitle) {
+      if (!Array.isArray(blocks)) return;
+      blocks.forEach((block, blockIdx) => {
+        if (!block) return;
+        const blockPath = `${pathPrefix}|b${blockIdx}`;
+        if (block.type === "bullets") {
+          (block.items || []).forEach((item, itemIdx) => {
+            if (typeof item === "string" && item.trim()) {
+              bullets.push({ id: `${blockPath}|i${itemIdx}`, sectionTitle, subsectionTitle, text: item });
+            }
+          });
+        } else if (block.type === "subsection") {
+          walkBlocks(block.blocks || [], blockPath, block.title || subsectionTitle);
+        }
+      });
+    }
+    walkBlocks(section?.blocks || [], `sec:${sectionId}`, null);
+  });
+  return bullets;
+}
+
+function applyDraftsToSkeleton(skeleton, suggestions, drafts) {
+  if (!skeleton || !Array.isArray(suggestions) || !Array.isArray(drafts)) return skeleton;
+
+  const replacements = new Map();
+  suggestions.forEach((r, i) => {
+    const after = (r?.after || "").trim();
+    const draft = (drafts[i] || "").trim();
+    if (after && draft && draft !== after) {
+      replacements.set(after, draft);
+    }
+  });
+
+  if (replacements.size === 0) return skeleton;
+
+  function replaceInNode(node) {
+    if (typeof node === "string") {
+      const match = replacements.get(node.trim());
+      return match !== undefined ? match : node;
+    }
+    if (Array.isArray(node)) return node.map(replaceInNode);
+    if (node && typeof node === "object") {
+      const out = {};
+      for (const key of Object.keys(node)) out[key] = replaceInNode(node[key]);
+      return out;
+    }
+    return node;
+  }
+
+  return replaceInNode(JSON.parse(JSON.stringify(skeleton)));
+}
+
+function buildFilteredSkeleton(skeleton, removedBulletIds) {
+  if (!skeleton || removedBulletIds.size === 0) return skeleton;
+  const filtered = JSON.parse(JSON.stringify(skeleton));
+  filtered.sections.forEach((section, secIdx) => {
+    const sectionId = section?.id || String(secIdx);
+    function filterBlocks(blocks, pathPrefix) {
+      if (!Array.isArray(blocks)) return;
+      blocks.forEach((block, blockIdx) => {
+        if (!block) return;
+        const blockPath = `${pathPrefix}|b${blockIdx}`;
+        if (block.type === "bullets") {
+          block.items = (block.items || []).filter(
+            (_, itemIdx) => !removedBulletIds.has(`${blockPath}|i${itemIdx}`)
+          );
+        } else if (block.type === "subsection") {
+          filterBlocks(block.blocks || [], blockPath);
+        }
+      });
+    }
+    filterBlocks(section?.blocks || [], `sec:${sectionId}`);
+  });
+  return filtered;
+}
+
 const Modal = ({ open, onClose, children }) => {
   useEffect(() => {
     if (!open) return;
@@ -111,9 +193,23 @@ export default function PdfPage() {
   const dragIndexRef = useRef(null);
 
   const [isFullPreview, setIsFullPreview] = useState(false);
+  const [pageCount, setPageCount] = useState(null);
+  const [removedBullets, setRemovedBullets] = useState(new Set());
+  const [trimOpen, setTrimOpen] = useState(false);
   const timerRef = useRef(null);
 
   const hasEval = !!evalState?.resumeCanonical;
+
+  const allBullets = useMemo(() => extractBullets(evalState.resumeCanonical), [evalState.resumeCanonical]);
+  const groupedBullets = useMemo(() => {
+    const groups = {};
+    allBullets.forEach((b) => {
+      const label = b.subsectionTitle ? `${b.sectionTitle} — ${b.subsectionTitle}` : b.sectionTitle;
+      if (!groups[label]) groups[label] = { label, bullets: [] };
+      groups[label].bullets.push(b);
+    });
+    return Object.values(groups);
+  }, [allBullets]);
 
   const rewriteSuggestions = evalState?.analysis?.improvements?.rewrite_suggestions || [];
   const keywordsSuggested = evalState?.analysis?.improvements?.missing_keywords || [];
@@ -197,6 +293,7 @@ export default function PdfPage() {
   const onClickGenerate = async () => {
     setError(null);
     setIsGenerating(true);
+    setPageCount(null);
     resetPreview();
     startProgress();
 
@@ -208,10 +305,14 @@ export default function PdfPage() {
 
       setEvalState((prev) => ({ ...prev, sectionOrder, enabledSectionIds }));
 
+      const baseSkeleton = evalState.editableSkeleton || evalState.resumeCanonical;
+      const draftedSkeleton = applyDraftsToSkeleton(baseSkeleton, rewriteSuggestions, suggestionDrafts);
+      const filteredSkeleton = buildFilteredSkeleton(draftedSkeleton, removedBullets);
+
       const payload = {
-        resume_canonical: evalState.resumeCanonical, // optimized skeleton (always)
-        keywords_suggested: keywordsSuggested,       // ✅ inject ALL
-        keyword_count: keywordsSuggested.length,     // keep for compatibility if backend expects it
+        resume_canonical: filteredSkeleton,
+        keywords_suggested: keywordsSuggested,
+        keyword_count: keywordsSuggested.length,
         section_order: sectionOrder,
         enabled_section_ids: enabledSectionIds,
       };
@@ -226,6 +327,9 @@ export default function PdfPage() {
         const errText = await resp.text();
         throw new Error(`PDF generation failed (${resp.status}): ${errText}`);
       }
+
+      const pages = parseInt(resp.headers.get("X-Page-Count") || "1", 10);
+      setPageCount(pages);
 
       const blob = await resp.blob();
       const url = window.URL.createObjectURL(blob);
@@ -371,6 +475,73 @@ export default function PdfPage() {
                 </div>
               </div>
 
+              {/* Trim content */}
+              {allBullets.length > 0 && (
+                <div className="noir-card rounded-3xl p-5 sm:p-6">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between text-sm font-extrabold"
+                    onClick={() => setTrimOpen((p) => !p)}
+                  >
+                    <span>Trim content</span>
+                    <span className="text-white/40 text-xs">{trimOpen ? "▲" : "▼"}</span>
+                  </button>
+                  <div className="mt-1 text-xs noir-muted">
+                    Remove individual bullets to help fit on 1 page.
+                    {removedBullets.size > 0 && (
+                      <span className="ml-1 text-amber-300/90 font-semibold">
+                        {removedBullets.size} removed
+                      </span>
+                    )}
+                  </div>
+
+                  {trimOpen && (
+                    <div className="mt-4 max-h-96 space-y-4 overflow-y-auto pr-1">
+                      {groupedBullets.map((group, gIdx) => (
+                        <div key={gIdx}>
+                          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-white/50">
+                            {group.label}
+                          </div>
+                          <div className="space-y-1">
+                            {group.bullets.map((bullet) => {
+                              const isRemoved = removedBullets.has(bullet.id);
+                              return (
+                                <div
+                                  key={bullet.id}
+                                  className={`flex items-start gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 ${isRemoved ? "opacity-50" : ""}`}
+                                >
+                                  <span className={`flex-1 text-xs leading-snug text-white/80 ${isRemoved ? "line-through text-white/40" : ""}`}>
+                                    {bullet.text}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setRemovedBullets((prev) => {
+                                        const next = new Set(prev);
+                                        if (isRemoved) next.delete(bullet.id);
+                                        else next.add(bullet.id);
+                                        return next;
+                                      })
+                                    }
+                                    className={`shrink-0 rounded-lg border px-1.5 py-0.5 text-xs ${
+                                      isRemoved
+                                        ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-300"
+                                        : "border-rose-300/30 bg-rose-300/10 text-rose-300 hover:bg-rose-300/20"
+                                    }`}
+                                  >
+                                    {isRemoved ? "↩" : "×"}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Diffs (compact, no target labels) */}
               {rewriteSuggestions.length > 0 && (
                 <div className="noir-card rounded-3xl p-5 sm:p-6">
@@ -496,6 +667,21 @@ export default function PdfPage() {
                   <div className="mt-5 rounded-2xl border border-rose-300/30 bg-rose-300/10 p-4 text-rose-100">
                     <div className="font-extrabold">Error</div>
                     <div className="mt-1 text-sm leading-relaxed">{error}</div>
+                  </div>
+                )}
+
+                {pageCount !== null && pageCount > 1 && !isGenerating && (
+                  <div className="mt-5 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-amber-100">
+                    <div className="font-extrabold">PDF is {pageCount} pages</div>
+                    <div className="mt-1 text-sm leading-relaxed">
+                      Use <span className="font-semibold">Trim content</span> on the left to remove bullets until it fits on 1 page, then regenerate.
+                    </div>
+                  </div>
+                )}
+
+                {pageCount === 1 && !isGenerating && pdfPreviewUrl && (
+                  <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-emerald-100 text-sm">
+                    Fits on 1 page ✓
                   </div>
                 )}
               </div>
